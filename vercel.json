@@ -3,5 +3,11 @@
     "app.py": {
       "includeFiles": "{etiquetas.py,PRECIOS_ALEXIS.pdf,Roboto-Bold.ttf,Roboto-Regular.ttf}"
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/ping",
+      "schedule": "0 14 * * *"
+    }
+  ]
 }
