@@ -1,7 +1,8 @@
 {
   "functions": {
     "app.py": {
-      "includeFiles": "{etiquetas.py,PRECIOS_ALEXIS.pdf,Roboto-Bold.ttf,Roboto-Regular.ttf}"
+      "includeFiles": "{etiquetas.py,PRECIOS_ALEXIS.pdf,Roboto-Bold.ttf,Roboto-Regular.ttf}",
+      "maxDuration": 60
     }
   },
   "crons": [

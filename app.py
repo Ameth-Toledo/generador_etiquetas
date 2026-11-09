@@ -177,6 +177,7 @@ HTML = r"""<!doctype html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root {
     --bg:#191919; --card:#222222; --campo:#1d1d1d; --borde:#383838;
@@ -265,6 +266,29 @@ HTML = r"""<!doctype html>
       <button class="danger" id="limpiar" disabled>Vaciar lista</button>
     </div>
     <div class="msg" id="estado"></div>
+  </div>
+
+  <div class="card">
+    <b style="font-weight:600">Importar desde archivo</b>
+    <div class="nota">Acepta .ods, .xlsx, .xls y .csv. Los productos se agregan al final de la lista activa.</div>
+    <div class="row" style="margin-top:8px">
+      <button id="btnArchivo">Elegir archivo</button>
+      <span class="nota" id="nombreArchivo" style="margin:0"></span>
+      <input type="file" id="archivoImp" accept=".ods,.xlsx,.xls,.csv" hidden>
+    </div>
+    <div id="panelImp" hidden>
+      <div class="grid" style="margin-top:14px">
+        <div><label for="selHoja">Hoja</label><select id="selHoja"></select></div>
+        <div><label for="palabras">Palabras del nombre (máx.)</label><input type="text" id="palabras" value="3" inputmode="numeric" autocomplete="off"></div>
+        <div><label for="mCodigo">Código</label><select id="mCodigo"></select></div>
+        <div><label for="mDescripcion">Descripción (se divide en nombre y detalle)</label><select id="mDescripcion"></select></div>
+        <div><label for="mMedida">Medida / unidad</label><select id="mMedida"></select></div>
+        <div><label for="mPrecio">Precio</label><select id="mPrecio"></select></div>
+      </div>
+      <div id="vistaImp" style="margin-top:14px;overflow-x:auto"></div>
+      <div class="row"><button class="primary" id="importar" disabled>Agregar a esta lista</button></div>
+      <div class="msg" id="msgImp"></div>
+    </div>
   </div>
 
   <div class="card">
@@ -587,6 +611,185 @@ $("archivo").onchange = async e => {
     pintar();
   } catch (err) { alert("El archivo no es un respaldo válido."); }
   e.target.value = "";
+};
+
+// ---------- Importar desde archivo ----------
+// <<PURAS (funciones sin pantalla; se prueban aparte)
+const normal = s => String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+const limpiarTexto = s => String(s == null ? "" : s).replace(/\s+/g, " ").trim();
+const textoCelda = c => c ? limpiarTexto(c.w != null ? c.w : c.v) : "";
+
+// Acepta 1856, "1,856.00", "1.856,00", "$1.856,00"
+function parsePrecio(v) {
+  if (typeof v === "number") return v;
+  let s = String(v == null ? "" : v).replace(/[$\s]/g, "");
+  if (!s) return NaN;
+  const c = s.lastIndexOf(","), p = s.lastIndexOf(".");
+  if (c >= 0 && p >= 0) {
+    s = c > p ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
+  } else if (c >= 0) {
+    s = (s.indexOf(",") === c && /,\d{1,2}$/.test(s)) ? s.replace(",", ".") : s.replace(/,/g, "");
+  } else if (p >= 0) {
+    if ((s.match(/\./g) || []).length > 1 || /\.\d{3}$/.test(s)) s = s.replace(/\./g, "");
+  }
+  return Number(s);
+}
+
+// "TRUPER CARRETILLA NEUMAT LIGERA 8 PIES..." -> nombre "TRUPER CARRETILLA NEUMAT", detalle "LIGERA 8 PIES..."
+function dividirDescripcion(desc, max) {
+  const palabras = limpiarTexto(desc).replace(/^["'“”]+|["'“”]+$/g, "").split(" ").filter(Boolean);
+  const CORTES = /^(A|CON|SIN|TIPO|PARA|COD|MOD|MODELO)$/i;
+  const esCorte = w => /\d/.test(w) || /[:(\/]/.test(w) || CORTES.test(w.replace(/[,;]+$/, ""));
+  const nombre = [];
+  let n = 0, i = 0;
+  for (; i < palabras.length; i++) {
+    const w = palabras[i];
+    const sinComa = w.replace(/[,;]+$/, "");
+    if (/^(DE|DEL|Y)$/i.test(sinComa) && nombre.length) {
+      const sig = palabras[i + 1];
+      if (sig && sinComa === w && !esCorte(sig) && n < max) { nombre.push(w); continue; }
+      break;
+    }
+    if (nombre.length && (esCorte(w) || n >= max)) break;
+    nombre.push(sinComa); n++;
+    if (sinComa !== w) { i++; break; }  // si trae coma, ahí termina el nombre
+  }
+  return { nombre: nombre.join(" "), detalle: palabras.slice(i).join(" ") };
+}
+
+function leerHoja(ws) {
+  if (!ws || !ws["!ref"]) return { filas: [], r0: 0 };
+  const r = XLSX.utils.decode_range(ws["!ref"]);
+  const filas = [];
+  for (let R = r.s.r; R <= r.e.r; R++) {
+    const fila = [];
+    for (let C = r.s.c; C <= r.e.c; C++) fila.push(ws[XLSX.utils.encode_cell({r: R, c: C})]);
+    filas.push(fila);
+  }
+  return { filas, r0: r.s.r };
+}
+
+const PAT = {
+  codigo: /^(ID_?SAP|ID|CODIGO|COD|SKU|CLAVE)$/,
+  descripcion: /DESCRIP/,
+  medida: /CREES|MEDIDA|UNIDAD|PRESENTACION/,
+  precio: /PRECIO|IMPORTE|PRICE/,
+};
+
+function detectarEncabezado(filas) {
+  let mejor = 0, mejorN = -1;
+  filas.slice(0, 10).forEach((f, i) => {
+    const n = f.filter(c => c && Object.values(PAT).some(p => p.test(normal(textoCelda(c))))).length;
+    if (n > mejorN) { mejorN = n; mejor = i; }
+  });
+  return mejor;
+}
+
+function columnasAuto(encabezado) {
+  const cols = {codigo: -1, descripcion: -1, medida: -1, precio: -1};
+  encabezado.forEach((c, i) => {
+    const t = normal(textoCelda(c));
+    for (const k of ["medida", "descripcion", "precio", "codigo"]) {  // medida antes que codigo (CODIGO_CREES)
+      if (cols[k] < 0 && PAT[k].test(t)) { cols[k] = i; break; }
+    }
+  });
+  return cols;
+}
+
+function construirProductos(filas, hdr, r0, cols, max, mayus) {
+  const productos = [], sinPrecio = [];
+  for (let i = hdr + 1; i < filas.length; i++) {
+    const f = filas[i];
+    const desc = cols.descripcion >= 0 ? textoCelda(f[cols.descripcion]) : "";
+    if (!desc) continue;
+    const celdaPrecio = cols.precio >= 0 ? f[cols.precio] : null;
+    const precio = celdaPrecio ? parsePrecio(celdaPrecio.t === "n" ? celdaPrecio.v : textoCelda(celdaPrecio)) : NaN;
+    if (!isFinite(precio) || precio < 0) { sinPrecio.push(i + r0 + 1); continue; }
+    const d = dividirDescripcion(desc, max);
+    const p = {
+      nombre: d.nombre,
+      detalle: d.detalle,
+      codigo: cols.codigo >= 0 ? textoCelda(f[cols.codigo]) : "",
+      medida: cols.medida >= 0 ? textoCelda(f[cols.medida]) : "",
+      precio: precio.toFixed(2),
+    };
+    if (mayus) ["nombre", "detalle", "medida"].forEach(k => p[k] = p[k].toUpperCase());
+    productos.push(p);
+  }
+  return { productos, sinPrecio };
+}
+// PURAS>>
+
+const imp = { libro: null, filas: [], hdr: 0, r0: 0 };
+const selCols = { codigo: "mCodigo", descripcion: "mDescripcion", medida: "mMedida", precio: "mPrecio" };
+
+function letraCol(i) { let s = "", n = i; do { s = String.fromCharCode(65 + n % 26) + s; n = Math.floor(n / 26) - 1; } while (n >= 0); return s; }
+
+$("btnArchivo").onclick = () => $("archivoImp").click();
+
+$("archivoImp").onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  if (typeof XLSX === "undefined") { alert("No se pudo cargar el lector de archivos. Revisa tu conexión y recarga la página."); return; }
+  try {
+    imp.libro = XLSX.read(await f.arrayBuffer(), {type: "array", raw: true});
+    $("nombreArchivo").textContent = f.name;
+    $("selHoja").innerHTML = imp.libro.SheetNames.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    cargarHoja();
+    $("panelImp").hidden = false;
+  } catch (err) { alert("No pude leer ese archivo. ¿Es .ods, .xlsx, .xls o .csv?"); }
+  e.target.value = "";
+};
+
+function cargarHoja() {
+  const h = leerHoja(imp.libro.Sheets[$("selHoja").value]);
+  imp.filas = h.filas; imp.r0 = h.r0;
+  imp.hdr = detectarEncabezado(h.filas);
+  const encabezado = h.filas[imp.hdr] || [];
+  const opciones = '<option value="-1">(ninguna)</option>' + encabezado.map((c, i) =>
+    `<option value="${i}">${letraCol(i)} – ${esc(textoCelda(c) || "(vacía)")}</option>`).join("");
+  const auto = columnasAuto(encabezado);
+  Object.entries(selCols).forEach(([k, id]) => { $(id).innerHTML = opciones; $(id).value = String(auto[k]); });
+  vistaPrevia();
+}
+
+function productosImportar() {
+  const cols = {};
+  Object.entries(selCols).forEach(([k, id]) => cols[k] = +$(id).value);
+  const max = Math.max(1, Math.min(10, parseInt($("palabras").value, 10) || 3));
+  return construirProductos(imp.filas, imp.hdr, imp.r0, cols, max, $("mayus").checked);
+}
+
+function vistaPrevia() {
+  const { productos, sinPrecio } = productosImportar();
+  $("importar").disabled = productos.length === 0;
+  $("importar").textContent = productos.length ? `Agregar ${productos.length} productos a esta lista` : "Agregar a esta lista";
+  let aviso = productos.length ? `Se encontraron ${productos.length} productos. Vista previa de los primeros 5:` : "No se encontraron productos. Revisa qué columna es la descripción y cuál el precio.";
+  if (sinPrecio.length) aviso += ` Se omitirán ${sinPrecio.length} fila(s) sin precio válido (filas ${sinPrecio.slice(0, 8).join(", ")}${sinPrecio.length > 8 ? "…" : ""}).`;
+  $("msgImp").textContent = aviso;
+  $("vistaImp").innerHTML = productos.length ? `<table>
+    <tr><th>Nombre</th><th>Detalle</th><th>Código</th><th>Medida</th><th>Precio</th></tr>
+    ${productos.slice(0, 5).map(p => `<tr><td>${esc(p.nombre)}</td><td>${esc(p.detalle)}</td><td>${esc(p.codigo)}</td><td>${esc(p.medida)}</td><td class="num">${esc(formatoPrecio(p.precio))}</td></tr>`).join("")}
+    </table>` : "";
+}
+
+["selHoja"].forEach(id => $(id).onchange = cargarHoja);
+Object.values(selCols).forEach(id => $(id).onchange = vistaPrevia);
+$("palabras").oninput = vistaPrevia;
+
+$("importar").onclick = () => {
+  const { productos } = productosImportar();
+  const l = activa();
+  if (!productos.length) return;
+  if (l.productos.length + productos.length > 1000) {
+    $("msgImp").textContent = "Una lista admite hasta 1000 productos. Crea una lista nueva e importa ahí.";
+    return;
+  }
+  l.productos.push(...productos);
+  pintar(); guardar(l);
+  $("estado").textContent = `Listo: se agregaron ${productos.length} productos a "${titulo(l)}".`;
+  $("panelImp").hidden = true;
+  $("nombreArchivo").textContent = "";
 };
 
 iniciar();

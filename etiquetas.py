@@ -62,6 +62,21 @@ def ajustar(f, texto, tam, max_ancho):
     return tam
 
 
+def partir_renglones(texto, tam, ancho_max):
+    """Parte el texto en renglones por palabras, sin pasarse del ancho."""
+    renglones, actual = [], ""
+    for palabra in texto.split():
+        prueba = (actual + " " + palabra).strip()
+        if actual and medir(NORMAL, prueba, tam) > ancho_max:
+            renglones.append(actual)
+            actual = palabra
+        else:
+            actual = prueba
+    if actual:
+        renglones.append(actual)
+    return renglones
+
+
 def separar_precio(valor):
     num = float(str(valor).replace("$", "").replace(",", "").strip())
     entero, cent = f"{num:.2f}".split(".")
@@ -76,9 +91,25 @@ def llenar_etiqueta(page, pos, p):
     tam = ajustar(NEGRITA, nombre, 44, 455)
     escribir(page, NEGRITA, CENTRO - medir(NEGRITA, nombre, tam) / 2, pos["nombre"], nombre, tam)
 
-    detalle = p["detalle"]
-    tam = ajustar(NORMAL, detalle, 27.4, 360)
-    escribir(page, NORMAL, CENTRO - medir(NORMAL, detalle, tam) / 2, pos["detalle"], detalle, tam)
+    # Detalle: 1 renglón si cabe a buen tamaño; si es largo, 2 renglones más chicos
+    detalle = " ".join(p["detalle"].split())
+    ancho_det = 380
+    if medir(NORMAL, detalle, 22) <= ancho_det:
+        tam = ajustar(NORMAL, detalle, 27.4, ancho_det)
+        escribir(page, NORMAL, CENTRO - medir(NORMAL, detalle, tam) / 2, pos["detalle"], detalle, tam)
+    else:
+        tam = 21
+        while tam > 11 and len(partir_renglones(detalle, tam, ancho_det)) > 2:
+            tam -= 1
+        renglones = partir_renglones(detalle, tam, ancho_det)[:2]
+        if len(renglones) == 2 and medir(NORMAL, renglones[1], tam) > ancho_det:
+            r = renglones[1]
+            while r and medir(NORMAL, r + "...", tam) > ancho_det:
+                r = r[:-1]
+            renglones[1] = r.rstrip() + "..."
+        base_y = pos["detalle"] - 10
+        for n, r in enumerate(renglones):
+            escribir(page, NORMAL, CENTRO - medir(NORMAL, r, tam) / 2, base_y + n * (tam + 2), r, tam)
 
     # Código: centrado en su caja (a la izquierda)
     codigo = p["codigo"]
@@ -102,21 +133,27 @@ def llenar_etiqueta(page, pos, p):
 
 def construir_pdf(productos):
     """Devuelve el PDF como bytes (lo usa también la página web)."""
+    # Se limpia la plantilla UNA vez: borra solo los textos de ejemplo
+    # (T, 1, 00, $, .18) y deja el diseño. Después se copia para cada hoja.
     plantilla = pymupdf.open(PLANTILLA)
+    base = plantilla[0]
+    for pos in ETIQUETAS:
+        for r in pos["borrar"]:
+            base.add_redact_annot(pymupdf.Rect(*r))
+    base.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE,
+                          graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
     salida = pymupdf.open()
     for i in range(0, len(productos), 2):
-        salida.insert_pdf(plantilla)
+        salida.insert_pdf(plantilla, from_page=0, to_page=0)
         page = salida[-1]
-        # Borra solo los textos de ejemplo (T, 1, 00, $, .18) y deja el diseño
-        for pos in ETIQUETAS:
-            for r in pos["borrar"]:
-                page.add_redact_annot(pymupdf.Rect(*r))
-        page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE,
-                              graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
         par = productos[i:i + 2] + [None] * (2 - len(productos[i:i + 2]))
         for pos, prod in zip(ETIQUETAS, par):
             llenar_etiqueta(page, pos, prod)
-    return salida.tobytes()
+    try:
+        salida.subset_fonts()  # deja solo los caracteres usados de cada fuente
+    except Exception:
+        pass
+    return salida.tobytes(garbage=4, deflate=True)
 
 
 def generar(productos):
