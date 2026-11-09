@@ -75,6 +75,7 @@ def limpiar_lista(d, id_):
 # ---------------------------------------------------------------- Acceso ----
 LOGIN = """<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Entrar</title>
+<link rel="icon" type="image/png" href="/logo-etiquetas.png">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#191919;color:#f1f1f1;font-family:'Poppins',sans-serif;color-scheme:dark}
@@ -92,7 +93,7 @@ p{color:#ff6b6b;font-size:13px;margin:10px 0 0}
 
 @app.before_request
 def proteger():
-    if not PASSWORD or request.path in ("/login", "/ping") or session.get("ok"):
+    if not PASSWORD or request.path in ("/login", "/ping", "/logo-etiquetas.png") or session.get("ok"):
         return None
     if request.path.startswith("/api/") or request.path == "/generar":
         return jsonify(error="No autorizado"), 401
@@ -169,6 +170,15 @@ def ping():
 
 # ------------------------------------------------------------------ Web ----
 HTML = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html"), encoding="utf-8").read()
+
+
+@app.get("/logo-etiquetas.png")
+def logo():
+    """Icono de la pestaña. Poner logo-etiquetas.png junto a app.py."""
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo-etiquetas.png")
+    if not os.path.exists(ruta):
+        return "", 404
+    return send_file(ruta, mimetype="image/png", max_age=86400)
 
 
 @app.get("/")

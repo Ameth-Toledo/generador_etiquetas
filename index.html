@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Generador de etiquetas</title>
+<link rel="icon" type="image/png" href="/logo-etiquetas.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
@@ -39,7 +40,20 @@
 
   /* ---- Contenido ---- */
   main { flex:1; min-width:0; padding:24px 20px 80px; }
-  .cont { max-width:920px; margin:0 auto; }
+  .cont { max-width:1640px; margin:0 auto; }
+  .cols { display:grid; grid-template-columns:minmax(330px, 410px) minmax(0, 1fr); gap:18px; align-items:start; }
+  .izq { position:sticky; top:16px; max-height:calc(100vh - 32px); overflow-y:auto; }
+  .cab { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  .cab h2 { margin:0; }
+  .cab .acc { display:flex; gap:8px; flex-wrap:wrap; }
+  .tabla { max-height:calc(100vh - 210px); overflow:auto; margin-top:8px; }
+  .tabla th { position:sticky; top:0; background:var(--card); z-index:1; }
+  .res { display:grid; grid-template-columns:1fr auto auto; gap:8px; align-items:center; padding:10px 0; border-bottom:1px solid var(--borde); }
+  .res .info { min-width:0; font-size:13px; }
+  .res .info b { font-weight:600; }
+  .res .info small { display:block; color:var(--suave); font-size:12px; overflow-wrap:anywhere; }
+  .res input.cant { width:56px; padding:8px 6px; text-align:center; }
+  .res button { padding:8px 12px; }
   .top { display:flex; align-items:center; gap:12px; margin-bottom:4px; }
   h1 { font-size:24px; font-weight:600; margin:0; overflow-wrap:anywhere; }
   h2 { margin:0 0 10px; font-size:18px; font-weight:600; }
@@ -74,6 +88,12 @@
   .check { display:flex; align-items:center; gap:8px; margin:0; font-weight:400; }
   .solo-movil { display:none; }
   #velo { display:none; }
+
+  @media (max-width:1100px) {
+    .cols { grid-template-columns:1fr; }
+    .izq { position:static; max-height:none; overflow:visible; }
+    .tabla { max-height:none; }
+  }
 
   @media (max-width:800px) {
     aside { position:fixed; left:0; top:0; z-index:20; width:min(86vw, 320px); transform:translateX(-100%); transition:transform .2s; }
@@ -138,6 +158,8 @@
       </div>
     </div>
 
+    <div class="cols">
+    <div class="izq">
     <div class="card">
       <div class="grid">
         <div class="full"><label for="nombre">Nombre</label><input type="text" id="nombre" placeholder="TANQUE ESTACIONARIO" autocomplete="off"></div>
@@ -156,13 +178,27 @@
     </div>
 
     <div class="card">
-      <h2>Productos (<span id="contador">0</span>)</h2>
-      <div id="lista"></div>
-      <div class="row">
-        <button class="primary" id="generar" disabled>Generar PDF de esta lista</button>
-        <button class="danger" id="limpiar" disabled>Vaciar lista</button>
+      <h2>Copiar desde otras listas</h2>
+      <div class="nota" style="margin:-4px 0 10px">Busca por código (o nombre). El producto se <b>copia</b> a esta lista; en la lista de origen se queda igual. Pon la cantidad para sacarlo varias veces.</div>
+      <input type="text" id="buscarCopia" placeholder="Código o nombre del producto..." autocomplete="off">
+      <div id="resultados"></div>
+      <div class="msg" id="msgCopia"></div>
+    </div>
+    </div>
+
+    <div class="der">
+    <div class="card">
+      <div class="cab">
+        <h2>Productos (<span id="contador">0</span>)</h2>
+        <div class="acc">
+          <button class="primary" id="generar" disabled>Generar PDF de esta lista</button>
+          <button class="danger" id="limpiar" disabled>Vaciar lista</button>
+        </div>
       </div>
-      <div class="msg" id="estado"></div>
+      <div class="msg" id="estado" style="margin:0 0 4px"></div>
+      <div id="lista"></div>
+    </div>
+    </div>
     </div>
   </div>
   </main>
@@ -176,6 +212,8 @@ const ACTIVA = "etiquetas_activa"; // lista que estaba abierta
 const MAX_LISTA = 1000;            // productos por lista
 let nube = false;
 let editIdx = null;
+let copiaActiva = null;   // lista para la que se pintaron los resultados de "copiar"
+let resultadosCopia = [];
 
 function nuevoId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
@@ -331,6 +369,7 @@ function pintar() {
   $("generar").disabled = $("limpiar").disabled = l.productos.length === 0;
   $("agregar").textContent = editIdx === null ? "Agregar a esta lista" : "Guardar cambios";
   $("cancelarEdicion").hidden = editIdx === null;
+  if (copiaActiva !== l.id) { copiaActiva = l.id; $("msgCopia").textContent = ""; pintarCopia(); }
   if (!l.productos.length) { $("lista").innerHTML = '<div class="vacio">Esta lista todavía no tiene productos.</div>'; return; }
   const filas = l.productos.map((p, i) => `
     <tr ${i === editIdx ? 'style="background:#2c3550"' : ""}>
@@ -339,7 +378,7 @@ function pintar() {
       <td class="num">${esc(formatoPrecio(p.precio))}</td>
       <td style="white-space:nowrap"><button data-editar="${i}">Editar</button> <button class="danger" data-borrar="${i}">Quitar</button></td>
     </tr>`).join("");
-  $("lista").innerHTML = `<div style="overflow-x:auto"><table>
+  $("lista").innerHTML = `<div class="tabla"><table>
     <tr><th>#</th><th>Nombre</th><th>Detalle</th><th>Código</th><th>Medida</th><th>Precio</th><th></th></tr>${filas}</table></div>`;
 }
 
@@ -611,7 +650,71 @@ function construirProductos(filas, hdr, r0, cols, max, mayus) {
   }
   return { productos, sinPrecio };
 }
+
+// Busca productos en las OTRAS listas (por código primero, luego nombre/detalle/medida).
+// Junta los repetidos y dice en qué listas están.
+function buscarProductos(listas, idActivo, consulta, nombreLista, limite) {
+  const t = normal(consulta);
+  if (!t) return [];
+  const mapa = new Map();
+  for (const l of listas) {
+    if (l.id === idActivo) continue;
+    for (const p of l.productos) {
+      const cod = normal(p.codigo);
+      const texto = normal([p.codigo, p.nombre, p.detalle, p.medida].join(" "));
+      if (!texto.includes(t)) continue;
+      const clave = [p.codigo, p.nombre, p.detalle, p.medida, p.precio].join("|");
+      if (!mapa.has(clave)) {
+        const puntos = cod === t ? 0 : cod.startsWith(t) ? 1 : cod.includes(t) ? 2 : 3;
+        mapa.set(clave, { producto: p, listas: [], puntos });
+      }
+      const r = mapa.get(clave);
+      const n = nombreLista(l);
+      if (!r.listas.includes(n)) r.listas.push(n);
+    }
+  }
+  return [...mapa.values()].sort((a, b) => a.puntos - b.puntos).slice(0, limite || 30);
+}
 // PURAS>>
+
+// ---------- Copiar productos desde otras listas ----------
+function pintarCopia() {
+  const q = $("buscarCopia").value;
+  resultadosCopia = buscarProductos(db.listas, db.activa, q, titulo, 30);
+  if (!q.trim()) { $("resultados").innerHTML = ""; return; }
+  if (!resultadosCopia.length) {
+    $("resultados").innerHTML = '<div class="vacio">No hay productos con ese código o nombre en las otras listas.</div>';
+    return;
+  }
+  $("resultados").innerHTML = resultadosCopia.map((r, i) => {
+    const p = r.producto;
+    const donde = r.listas[0] + (r.listas.length > 1 ? ` y ${r.listas.length - 1} más` : "");
+    return `<div class="res">
+      <div class="info"><b>${esc(p.codigo || "sin código")}</b> ${esc(p.nombre)}
+        <small>${esc([p.detalle, p.medida, formatoPrecio(p.precio)].filter(Boolean).join(" · "))}<br>En: ${esc(donde)}</small></div>
+      <input type="text" class="cant" value="1" inputmode="numeric" title="Cantidad de copias" data-i="${i}">
+      <button data-copiar="${i}">Copiar</button>
+    </div>`;
+  }).join("");
+}
+
+$("buscarCopia").oninput = () => { $("msgCopia").textContent = ""; pintarCopia(); };
+
+$("resultados").onclick = e => {
+  const i = e.target.dataset.copiar;
+  if (i === undefined) return;
+  const r = resultadosCopia[+i];
+  const fila = e.target.closest(".res");
+  const cant = Math.max(1, Math.min(99, parseInt(fila.querySelector(".cant").value, 10) || 1));
+  const l = activa();
+  if (l.productos.length + cant > MAX_LISTA) {
+    $("msgCopia").textContent = `Una lista admite hasta ${MAX_LISTA} productos.`;
+    return;
+  }
+  for (let k = 0; k < cant; k++) l.productos.push({ ...r.producto });
+  pintar(); guardar(l);
+  $("msgCopia").textContent = `Se copió ${cant === 1 ? "1 vez" : cant + " veces"}: ${r.producto.codigo || r.producto.nombre}.`;
+};
 
 const imp = { libro: null, filas: [], hdr: 0, r0: 0 };
 const selCols = { codigo: "mCodigo", descripcion: "mDescripcion", medida: "mMedida", precio: "mPrecio" };
