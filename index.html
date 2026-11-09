@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generador de etiquetas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --bg:#191919; --lateral:#141414; --card:#222222; --campo:#1d1d1d; --borde:#383838;
+    --texto:#f1f1f1; --suave:#a3a3a3; --acento:#4f7cff; --peligro:#ff6b6b;
+    color-scheme: dark;
+  }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { font-family:'Poppins', system-ui, sans-serif; margin:0; background:var(--bg); color:var(--texto); }
+  .app { display:flex; min-height:100vh; }
+
+  /* ---- Sidebar ---- */
+  aside {
+    width:290px; flex:none; background:var(--lateral); border-right:1px solid var(--borde);
+    padding:16px; position:sticky; top:0; height:100vh; display:flex; flex-direction:column; gap:10px;
+  }
+  .logo { font-weight:600; font-size:17px; margin-bottom:2px; display:flex; justify-content:space-between; align-items:center; }
+  #listas { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; margin:0 -4px; padding:0 4px; }
+  button.item {
+    display:flex; justify-content:space-between; gap:8px; width:100%; text-align:left;
+    background:transparent; border:1px solid transparent; padding:9px 10px; font-size:13px;
+  }
+  button.item:hover { background:#222; }
+  button.item.activa, button.item.activa:hover { background:#2c3550; border-color:var(--acento); }
+  .item .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .item .n { color:var(--suave); flex:none; }
+  .pie { border-top:1px solid var(--borde); padding-top:10px; display:flex; flex-direction:column; gap:8px; }
+  .pie button { font-size:12px; padding:8px 10px; }
+
+  /* ---- Contenido ---- */
+  main { flex:1; min-width:0; padding:24px 20px 80px; }
+  .cont { max-width:920px; margin:0 auto; }
+  .top { display:flex; align-items:center; gap:12px; margin-bottom:4px; }
+  h1 { font-size:24px; font-weight:600; margin:0; overflow-wrap:anywhere; }
+  h2 { margin:0 0 10px; font-size:18px; font-weight:600; }
+  .card { background:var(--card); border:1px solid var(--borde); border-radius:14px; padding:18px; margin-bottom:18px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .full { grid-column:1 / -1; }
+  label { display:block; font-size:13px; font-weight:500; margin-bottom:5px; color:var(--suave); }
+  input[type=text], select {
+    width:100%; padding:11px 12px; font-size:15px; font-family:inherit; color:var(--texto);
+    background:var(--campo); border:1px solid var(--borde); border-radius:10px;
+  }
+  input::placeholder { color:#6a6a6a; }
+  input:focus, select:focus { outline:2px solid var(--acento); border-color:var(--acento); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px; }
+  button {
+    font-family:inherit; font-size:14px; padding:10px 16px; border-radius:10px;
+    border:1px solid var(--borde); background:#2b2b2b; color:var(--texto); cursor:pointer;
+  }
+  button:hover:not(:disabled) { background:#343434; }
+  button.primary { background:var(--acento); border-color:var(--acento); color:#fff; font-weight:600; }
+  button.primary:hover:not(:disabled) { background:#6a90ff; }
+  button.danger { color:var(--peligro); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:9px 6px; border-bottom:1px solid var(--borde); }
+  th { font-size:11px; color:var(--suave); text-transform:uppercase; font-weight:500; }
+  td.num { text-align:right; white-space:nowrap; }
+  .vacio { color:var(--suave); padding:10px 0; font-size:14px; }
+  .msg { margin-top:10px; font-size:13px; color:var(--suave); }
+  .msg.error { color:var(--peligro); }
+  .nota { font-size:12px; color:var(--suave); margin-top:8px; }
+  .check { display:flex; align-items:center; gap:8px; margin:0; font-weight:400; }
+  .solo-movil { display:none; }
+  #velo { display:none; }
+
+  @media (max-width:800px) {
+    aside { position:fixed; left:0; top:0; z-index:20; width:min(86vw, 320px); transform:translateX(-100%); transition:transform .2s; }
+    body.menu-abierto aside { transform:none; }
+    body.menu-abierto #velo { display:block; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:10; }
+    .solo-movil { display:inline-block; }
+    main { padding:16px 14px 80px; }
+    .grid { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside>
+    <div class="logo"><span>Etiquetas</span><button id="cerrarMenu" class="solo-movil" style="padding:4px 10px">✕</button></div>
+    <button class="primary" id="nuevaLista">+ Nueva lista</button>
+    <button id="btnArchivo">⬆ Importar archivo</button>
+    <input type="file" id="archivoImp" accept=".ods,.xlsx,.xls,.csv" hidden>
+    <input type="text" id="buscar" placeholder="Buscar lista..." autocomplete="off">
+    <div id="listas"></div>
+    <div class="pie">
+      <div class="msg" id="nube" style="margin:0">Conectando...</div>
+      <button id="respaldar">Descargar respaldo</button>
+      <button id="restaurar">Restaurar respaldo</button>
+      <input type="file" id="archivo" accept=".json" hidden>
+    </div>
+  </aside>
+  <div id="velo"></div>
+
+  <main>
+  <div class="cont">
+    <div class="top">
+      <button id="menu" class="solo-movil">☰</button>
+      <h1 id="tituloPag"></h1>
+    </div>
+    <div class="row" style="margin:10px 0 18px">
+      <button id="renombrar">Renombrar</button>
+      <button id="duplicar">Duplicar</button>
+      <button id="actualizar">↻ Actualizar</button>
+      <button class="danger" id="eliminarLista">Eliminar lista</button>
+    </div>
+
+    <!-- Importar archivo: crea una lista nueva -->
+    <div class="card" id="panelImp" hidden>
+      <h2 id="tituloImp">Importar archivo</h2>
+      <div class="nota" style="margin:-4px 0 12px">Los productos del archivo se guardan en una <b>lista nueva</b>; no se mezclan con la lista que tienes abierta.</div>
+      <div class="grid">
+        <div class="full"><label for="nombreImp">Nombre de la lista nueva (se le pone la fecha de hoy)</label><input type="text" id="nombreImp" autocomplete="off"></div>
+        <div><label for="selHoja">Hoja</label><select id="selHoja"></select></div>
+        <div><label for="palabras">Palabras del nombre (máx.)</label><input type="text" id="palabras" value="3" inputmode="numeric" autocomplete="off"></div>
+        <div><label for="mCodigo">Código</label><select id="mCodigo"></select></div>
+        <div><label for="mDescripcion">Descripción (se divide en nombre y detalle)</label><select id="mDescripcion"></select></div>
+        <div><label for="mMedida">Medida / unidad</label><select id="mMedida"></select></div>
+        <div><label for="mPrecio">Precio</label><select id="mPrecio"></select></div>
+      </div>
+      <div id="vistaImp" style="margin-top:14px;overflow-x:auto"></div>
+      <div class="msg" id="msgImp"></div>
+      <div class="row">
+        <button class="primary" id="importar" disabled>Crear lista</button>
+        <button id="cancelarImp">Cancelar</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="grid">
+        <div class="full"><label for="nombre">Nombre</label><input type="text" id="nombre" placeholder="TANQUE ESTACIONARIO" autocomplete="off"></div>
+        <div class="full"><label for="detalle">Detalle</label><input type="text" id="detalle" placeholder="120 LTS COD: PT120ES" autocomplete="off"></div>
+        <div><label for="codigo">Código</label><input type="text" id="codigo" placeholder="0013841" autocomplete="off"></div>
+        <div><label for="medida">Medida / unidad</label><input type="text" id="medida" placeholder="TANQUE ESTA 005" autocomplete="off"></div>
+        <div><label for="precio">Precio</label><input type="text" id="precio" inputmode="decimal" placeholder="6819.18" autocomplete="off"></div>
+      </div>
+      <div class="row">
+        <button class="primary" id="agregar">Agregar a esta lista</button>
+        <button id="cancelarEdicion" hidden>Cancelar edición</button>
+        <label class="check"><input type="checkbox" id="mayus" checked> Convertir a MAYÚSCULAS</label>
+      </div>
+      <div class="nota">Enter pasa al siguiente campo. Enter en el precio agrega el producto a la lista.</div>
+      <div class="msg error" id="error"></div>
+    </div>
+
+    <div class="card">
+      <h2>Productos (<span id="contador">0</span>)</h2>
+      <div id="lista"></div>
+      <div class="row">
+        <button class="primary" id="generar" disabled>Generar PDF de esta lista</button>
+        <button class="danger" id="limpiar" disabled>Vaciar lista</button>
+      </div>
+      <div class="msg" id="estado"></div>
+    </div>
+  </div>
+  </main>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const campos = ["nombre", "detalle", "codigo", "medida", "precio"];
+const CLAVE = "etiquetas_db";      // modo local (sin nube)
+const ACTIVA = "etiquetas_activa"; // lista que estaba abierta
+const MAX_LISTA = 1000;            // productos por lista
+let nube = false;
+let editIdx = null;
+
+function nuevoId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+function hoy() {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)}`;
+}
+
+// Nombre completo que se muestra: 07/11/26-Lista 1
+function titulo(l) { return `${l.fecha}-${l.nombre}`; }
+
+function listaVacia(nombre) {
+  return { id: nuevoId(), fecha: hoy(), nombre: nombre || nombrePorDefecto(), creada: Date.now(), productos: [] };
+}
+
+function nombrePorDefecto() {
+  const h = hoy();
+  const delDia = db.listas.filter(l => l.fecha === h);
+  const usados = new Set(delDia.map(l => l.nombre));
+  let n = delDia.length + 1;
+  while (usados.has("Lista " + n)) n++;
+  return "Lista " + n;
+}
+
+function cargarLocal() {
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(CLAVE)); } catch (e) {}
+  if (!(d && Array.isArray(d.listas) && d.listas.length)) {
+    let viejos = [];
+    try { viejos = JSON.parse(localStorage.getItem("productos") || "[]"); } catch (e) {}
+    const id = nuevoId();
+    d = { activa: id, listas: [{ id, nombre: "Lista 1", productos: viejos }] };
+  }
+  d.listas.forEach(l => { if (!l.fecha) l.fecha = hoy(); if (!l.creada) l.creada = 0; });
+  return d;
+}
+
+let db = { activa: null, listas: [] };
+
+function activa() { return db.listas.find(l => l.id === db.activa) || db.listas[0]; }
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+function formatoPrecio(p) {
+  const n = parseFloat(String(p).replace(/[$,\s]/g, ""));
+  return isNaN(n) ? p : "$" + n.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function aviso(texto, error) {
+  const el = $("nube");
+  el.textContent = texto;
+  el.style.color = error ? "var(--peligro)" : "var(--suave)";
+}
+
+// ---------- Guardado (nube o local) ----------
+const JSON_H = {"Content-Type": "application/json"};
+
+function guardarLocal() { try { localStorage.setItem(CLAVE, JSON.stringify(db)); } catch (e) {} }
+
+async function guardar(l) {
+  if (!nube) { guardarLocal(); return; }
+  aviso("Guardando...");
+  try {
+    const r = await fetch("/api/listas/" + l.id, {method: "PUT", headers: JSON_H, body: JSON.stringify(l)});
+    if (r.status === 401) { location.href = "/login"; return; }
+    if (!r.ok) throw new Error();
+    aviso("☁ Guardado en la nube");
+  } catch (e) { aviso("No se pudo guardar. Revisa tu conexión e inténtalo de nuevo.", true); }
+}
+
+async function borrarRemoto(id) {
+  if (!nube) { guardarLocal(); return; }
+  try {
+    const r = await fetch("/api/listas/" + id, {method: "DELETE"});
+    if (r.status === 401) { location.href = "/login"; return; }
+    if (!r.ok) throw new Error();
+    aviso("☁ Guardado en la nube");
+  } catch (e) { aviso("No se pudo borrar en la nube.", true); }
+}
+
+function guardarActiva() {
+  if (nube) { try { localStorage.setItem(ACTIVA, db.activa); } catch (e) {} }
+  else guardarLocal();
+}
+
+// ---------- Carga inicial ----------
+async function traerDeLaNube() {
+  const r = await fetch("/api/listas");
+  if (r.status === 401) { location.href = "/login"; throw new Error("auth"); }
+  if (!r.ok) throw new Error("sin nube");
+  const listas = await r.json();
+  listas.forEach(l => { if (!l.creada) l.creada = 0; });
+  listas.sort((a, b) => a.creada - b.creada);
+  return listas;
+}
+
+async function iniciar() {
+  const local = cargarLocal();
+  try {
+    let listas = await traerDeLaNube();
+    nube = true;
+    db = { activa: null, listas };
+    if (!listas.length) {
+      // Nube vacía: sube las listas que ya tenías en este navegador
+      const conDatos = local.listas.filter(l => l.productos.length);
+      listas = conDatos.length ? conDatos : [listaVacia("Lista 1")];
+      db.listas = listas;
+      for (const l of listas) await guardar(l);
+    }
+    let guardada = null;
+    try { guardada = localStorage.getItem(ACTIVA); } catch (e) {}
+    db.activa = db.listas.find(l => l.id === guardada) ? guardada : db.listas[0].id;
+    aviso("☁ Guardado en la nube");
+  } catch (e) {
+    if (e.message === "auth") return;
+    nube = false;
+    db = local;
+    aviso("Modo local: las listas se guardan solo en este navegador.", true);
+  }
+  pintar();
+}
+
+$("actualizar").onclick = async () => {
+  if (!nube) return aviso("Modo local: no hay nube que actualizar.", true);
+  aviso("Actualizando...");
+  try {
+    const listas = await traerDeLaNube();
+    const actual = db.activa;
+    db.listas = listas.length ? listas : [listaVacia("Lista 1")];
+    db.activa = db.listas.find(l => l.id === actual) ? actual : db.listas[0].id;
+    editIdx = null; limpiarCampos();
+    pintar(); aviso("☁ Listas actualizadas");
+  } catch (e) { aviso("No se pudo actualizar.", true); }
+};
+
+// ---------- Pantalla ----------
+function pintarSidebar() {
+  const q = normal($("buscar").value);
+  const orden = [...db.listas].sort((a, b) => (b.creada || 0) - (a.creada || 0));
+  const visibles = orden.filter(x => normal(titulo(x)).includes(q));
+  $("listas").innerHTML = visibles.length
+    ? visibles.map(x => `<button class="item ${x.id === db.activa ? "activa" : ""}" data-id="${x.id}" title="${esc(titulo(x))}">
+        <span class="t">${esc(titulo(x))}</span><span class="n">${x.productos.length}</span></button>`).join("")
+    : '<div class="vacio">Sin resultados.</div>';
+}
+
+function pintar() {
+  const l = activa();
+  db.activa = l.id;
+  pintarSidebar();
+  $("tituloPag").textContent = titulo(l);
+  $("contador").textContent = l.productos.length;
+  $("generar").disabled = $("limpiar").disabled = l.productos.length === 0;
+  $("agregar").textContent = editIdx === null ? "Agregar a esta lista" : "Guardar cambios";
+  $("cancelarEdicion").hidden = editIdx === null;
+  if (!l.productos.length) { $("lista").innerHTML = '<div class="vacio">Esta lista todavía no tiene productos.</div>'; return; }
+  const filas = l.productos.map((p, i) => `
+    <tr ${i === editIdx ? 'style="background:#2c3550"' : ""}>
+      <td>${i + 1}</td><td>${esc(p.nombre)}</td><td>${esc(p.detalle)}</td>
+      <td>${esc(p.codigo)}</td><td>${esc(p.medida)}</td>
+      <td class="num">${esc(formatoPrecio(p.precio))}</td>
+      <td style="white-space:nowrap"><button data-editar="${i}">Editar</button> <button class="danger" data-borrar="${i}">Quitar</button></td>
+    </tr>`).join("");
+  $("lista").innerHTML = `<div style="overflow-x:auto"><table>
+    <tr><th>#</th><th>Nombre</th><th>Detalle</th><th>Código</th><th>Medida</th><th>Precio</th><th></th></tr>${filas}</table></div>`;
+}
+
+function limpiarCampos() { campos.forEach(c => $(c).value = ""); }
+
+function abrirMenu() { document.body.classList.add("menu-abierto"); }
+function cerrarMenu() { document.body.classList.remove("menu-abierto"); }
+$("menu").onclick = abrirMenu;
+$("cerrarMenu").onclick = cerrarMenu;
+$("velo").onclick = cerrarMenu;
+
+// ---------- Listas ----------
+$("listas").onclick = e => {
+  const b = e.target.closest("[data-id]");
+  if (!b) return;
+  db.activa = b.dataset.id; editIdx = null; limpiarCampos();
+  guardarActiva(); cerrarMenu(); pintar();
+};
+
+$("buscar").oninput = pintarSidebar;
+
+$("nuevaLista").onclick = () => {
+  const def = nombrePorDefecto();
+  const entrada = prompt(`Nombre de la lista (se guarda como ${hoy()}-nombre).\nDeja vacío para usar "${def}":`, "");
+  if (entrada === null) return;
+  const l = listaVacia(entrada.trim() || def);
+  db.listas.push(l); db.activa = l.id; editIdx = null; limpiarCampos();
+  $("buscar").value = "";
+  guardarActiva(); cerrarMenu(); pintar(); guardar(l); $("nombre").focus();
+};
+
+$("renombrar").onclick = () => {
+  const l = activa();
+  const nombre = prompt(`Nuevo nombre (la fecha ${l.fecha} se mantiene):`, l.nombre);
+  if (!nombre || !nombre.trim()) return;
+  l.nombre = nombre.trim(); pintar(); guardar(l);
+};
+
+$("duplicar").onclick = () => {
+  const l = activa();
+  const copia = listaVacia(l.nombre + " (copia)");
+  copia.productos = JSON.parse(JSON.stringify(l.productos));
+  db.listas.push(copia); db.activa = copia.id; editIdx = null;
+  guardarActiva(); pintar(); guardar(copia);
+};
+
+$("eliminarLista").onclick = async () => {
+  const l = activa();
+  if (!confirm(`¿Eliminar la lista "${titulo(l)}" con sus ${l.productos.length} productos? No se puede deshacer.`)) return;
+  db.listas = db.listas.filter(x => x.id !== l.id);
+  editIdx = null; limpiarCampos();
+  let nueva = null;
+  if (!db.listas.length) { nueva = listaVacia("Lista 1"); db.listas.push(nueva); }
+  db.activa = [...db.listas].sort((a, b) => (b.creada || 0) - (a.creada || 0))[0].id;
+  guardarActiva(); pintar();
+  await borrarRemoto(l.id);
+  if (nueva) guardar(nueva);
+};
+
+// ---------- Productos ----------
+$("agregar").onclick = () => {
+  $("error").textContent = "";
+  const p = {};
+  campos.forEach(c => p[c] = $(c).value.trim());
+  if (!p.nombre) { $("error").textContent = "Falta el nombre."; return $("nombre").focus(); }
+  const num = parseFloat(p.precio.replace(/[$,\s]/g, ""));
+  if (isNaN(num)) { $("error").textContent = "El precio no es válido (ej. 6819.18)."; return $("precio").focus(); }
+  if ($("mayus").checked) ["nombre", "detalle", "medida"].forEach(c => p[c] = p[c].toUpperCase());
+  const l = activa();
+  if (editIdx !== null && l.productos[editIdx]) l.productos[editIdx] = p;
+  else {
+    if (l.productos.length >= MAX_LISTA) { $("error").textContent = `Una lista admite hasta ${MAX_LISTA} productos. Crea otra lista.`; return; }
+    l.productos.push(p);
+  }
+  editIdx = null;
+  limpiarCampos(); pintar(); guardar(l);
+  $("nombre").focus();
+};
+
+$("cancelarEdicion").onclick = () => { editIdx = null; limpiarCampos(); pintar(); };
+
+// Enter: pasa al siguiente campo; en el precio agrega el producto
+campos.forEach((c, i) => {
+  $(c).addEventListener("keydown", e => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (i === campos.length - 1) $("agregar").click();
+    else $(campos[i + 1]).focus();
+  });
+});
+
+$("lista").onclick = e => {
+  const l = activa();
+  const b = e.target.dataset.borrar, ed = e.target.dataset.editar;
+  if (b !== undefined) {
+    l.productos.splice(+b, 1);
+    if (editIdx !== null) { editIdx = null; limpiarCampos(); }
+    pintar(); guardar(l);
+  }
+  if (ed !== undefined) {
+    const p = l.productos[+ed];
+    campos.forEach(c => $(c).value = p[c]);
+    editIdx = +ed; pintar(); $("nombre").focus();
+  }
+};
+
+$("limpiar").onclick = () => {
+  const l = activa();
+  if (confirm(`¿Vaciar todos los productos de "${titulo(l)}"?`)) {
+    l.productos = []; editIdx = null; limpiarCampos(); pintar(); guardar(l);
+  }
+};
+
+// ---------- PDF ----------
+$("generar").onclick = async () => {
+  const l = activa();
+  $("estado").textContent = "Generando PDF...";
+  $("generar").disabled = true;
+  try {
+    const r = await fetch("/generar", {method: "POST", headers: JSON_H, body: JSON.stringify(l.productos)});
+    if (r.status === 401) { location.href = "/login"; return; }
+    if (!r.ok) throw new Error((await r.json()).error || "Error al generar");
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const archivo = titulo(l).replace(/\//g, "-").replace(/[^\w\-. ()]+/g, "_").trim() || "etiquetas";
+    const a = document.createElement("a");
+    a.href = url; a.download = archivo + ".pdf"; a.click();
+    window.open(url, "_blank");
+    $("estado").textContent = `Listo: ${archivo}.pdf descargado.`;
+  } catch (err) {
+    $("estado").textContent = "Error: " + err.message;
+  }
+  $("generar").disabled = activa().productos.length === 0;
+};
+
+// ---------- Respaldo ----------
+$("respaldar").onclick = () => {
+  const blob = new Blob([JSON.stringify({listas: db.listas}, null, 2)], {type: "application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "respaldo-etiquetas.json"; a.click();
+};
+
+$("restaurar").onclick = () => $("archivo").click();
+$("archivo").onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const d = JSON.parse(await f.text());
+    if (!d || !Array.isArray(d.listas) || !d.listas.length) throw new Error();
+    if (!confirm(`Se agregarán ${d.listas.length} lista(s) del respaldo a las que ya tienes. ¿Continuar?`)) return;
+    const ids = new Set(db.listas.map(l => l.id));
+    for (const l of d.listas) {
+      if (!l.fecha) l.fecha = hoy();
+      if (!l.creada) l.creada = Date.now();
+      if (!Array.isArray(l.productos)) l.productos = [];
+      if (!l.id || ids.has(l.id)) l.id = nuevoId();
+      ids.add(l.id);
+      db.listas.push(l);
+      await guardar(l);
+    }
+    pintar();
+  } catch (err) { alert("El archivo no es un respaldo válido."); }
+  e.target.value = "";
+};
+
+// ---------- Importar desde archivo (crea una lista nueva) ----------
+// <<PURAS (funciones sin pantalla; se prueban aparte)
+const normal = s => String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+const limpiarTexto = s => String(s == null ? "" : s).replace(/\s+/g, " ").trim();
+const textoCelda = c => c ? limpiarTexto(c.w != null ? c.w : c.v) : "";
+
+// Acepta 1856, "1,856.00", "1.856,00", "$1.856,00"
+function parsePrecio(v) {
+  if (typeof v === "number") return v;
+  let s = String(v == null ? "" : v).replace(/[$\s]/g, "");
+  if (!s) return NaN;
+  const c = s.lastIndexOf(","), p = s.lastIndexOf(".");
+  if (c >= 0 && p >= 0) {
+    s = c > p ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
+  } else if (c >= 0) {
+    s = (s.indexOf(",") === c && /,\d{1,2}$/.test(s)) ? s.replace(",", ".") : s.replace(/,/g, "");
+  } else if (p >= 0) {
+    if ((s.match(/\./g) || []).length > 1 || /\.\d{3}$/.test(s)) s = s.replace(/\./g, "");
+  }
+  return Number(s);
+}
+
+// "TRUPER CARRETILLA NEUMAT LIGERA 8 PIES..." -> nombre "TRUPER CARRETILLA NEUMAT", detalle "LIGERA 8 PIES..."
+function dividirDescripcion(desc, max) {
+  const palabras = limpiarTexto(desc).replace(/^["'“”]+|["'“”]+$/g, "").split(" ").filter(Boolean);
+  const CORTES = /^(A|CON|SIN|TIPO|PARA|COD|MOD|MODELO)$/i;
+  const esCorte = w => /\d/.test(w) || /[:(\/]/.test(w) || CORTES.test(w.replace(/[,;]+$/, ""));
+  const nombre = [];
+  let n = 0, i = 0;
+  for (; i < palabras.length; i++) {
+    const w = palabras[i];
+    const sinComa = w.replace(/[,;]+$/, "");
+    if (/^(DE|DEL|Y)$/i.test(sinComa) && nombre.length) {
+      const sig = palabras[i + 1];
+      if (sig && sinComa === w && !esCorte(sig) && n < max) { nombre.push(w); continue; }
+      break;
+    }
+    if (nombre.length && (esCorte(w) || n >= max)) break;
+    nombre.push(sinComa); n++;
+    if (sinComa !== w) { i++; break; }  // si trae coma, ahí termina el nombre
+  }
+  return { nombre: nombre.join(" "), detalle: palabras.slice(i).join(" ") };
+}
+
+function leerHoja(ws) {
+  if (!ws || !ws["!ref"]) return { filas: [], r0: 0 };
+  const r = XLSX.utils.decode_range(ws["!ref"]);
+  const filas = [];
+  for (let R = r.s.r; R <= r.e.r; R++) {
+    const fila = [];
+    for (let C = r.s.c; C <= r.e.c; C++) fila.push(ws[XLSX.utils.encode_cell({r: R, c: C})]);
+    filas.push(fila);
+  }
+  return { filas, r0: r.s.r };
+}
+
+const PAT = {
+  codigo: /^(ID_?SAP|ID|CODIGO|COD|SKU|CLAVE)$/,
+  descripcion: /DESCRIP/,
+  medida: /CREES|MEDIDA|UNIDAD|PRESENTACION/,
+  precio: /PRECIO|IMPORTE|PRICE/,
+};
+
+function detectarEncabezado(filas) {
+  let mejor = 0, mejorN = -1;
+  filas.slice(0, 10).forEach((f, i) => {
+    const n = f.filter(c => c && Object.values(PAT).some(p => p.test(normal(textoCelda(c))))).length;
+    if (n > mejorN) { mejorN = n; mejor = i; }
+  });
+  return mejor;
+}
+
+function columnasAuto(encabezado) {
+  const cols = {codigo: -1, descripcion: -1, medida: -1, precio: -1};
+  encabezado.forEach((c, i) => {
+    const t = normal(textoCelda(c));
+    for (const k of ["medida", "descripcion", "precio", "codigo"]) {  // medida antes que codigo (CODIGO_CREES)
+      if (cols[k] < 0 && PAT[k].test(t)) { cols[k] = i; break; }
+    }
+  });
+  return cols;
+}
+
+function construirProductos(filas, hdr, r0, cols, max, mayus) {
+  const productos = [], sinPrecio = [];
+  for (let i = hdr + 1; i < filas.length; i++) {
+    const f = filas[i];
+    const desc = cols.descripcion >= 0 ? textoCelda(f[cols.descripcion]) : "";
+    if (!desc) continue;
+    const celdaPrecio = cols.precio >= 0 ? f[cols.precio] : null;
+    const precio = celdaPrecio ? parsePrecio(celdaPrecio.t === "n" ? celdaPrecio.v : textoCelda(celdaPrecio)) : NaN;
+    if (!isFinite(precio) || precio < 0) { sinPrecio.push(i + r0 + 1); continue; }
+    const d = dividirDescripcion(desc, max);
+    const p = {
+      nombre: d.nombre,
+      detalle: d.detalle,
+      codigo: cols.codigo >= 0 ? textoCelda(f[cols.codigo]) : "",
+      medida: cols.medida >= 0 ? textoCelda(f[cols.medida]) : "",
+      precio: precio.toFixed(2),
+    };
+    if (mayus) ["nombre", "detalle", "medida"].forEach(k => p[k] = p[k].toUpperCase());
+    productos.push(p);
+  }
+  return { productos, sinPrecio };
+}
+// PURAS>>
+
+const imp = { libro: null, filas: [], hdr: 0, r0: 0 };
+const selCols = { codigo: "mCodigo", descripcion: "mDescripcion", medida: "mMedida", precio: "mPrecio" };
+
+function letraCol(i) { let s = "", n = i; do { s = String.fromCharCode(65 + n % 26) + s; n = Math.floor(n / 26) - 1; } while (n >= 0); return s; }
+
+$("btnArchivo").onclick = () => { cerrarMenu(); $("archivoImp").click(); };
+
+$("archivoImp").onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  if (typeof XLSX === "undefined") { alert("No se pudo cargar el lector de archivos. Revisa tu conexión y recarga la página."); return; }
+  try {
+    imp.libro = XLSX.read(await f.arrayBuffer(), {type: "array", raw: true});
+    $("tituloImp").textContent = "Importar: " + f.name;
+    $("nombreImp").value = f.name.replace(/\.[^.]+$/, "").slice(0, 80);
+    $("selHoja").innerHTML = imp.libro.SheetNames.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    cargarHoja();
+    $("panelImp").hidden = false;
+    $("panelImp").scrollIntoView({behavior: "smooth", block: "start"});
+  } catch (err) { alert("No pude leer ese archivo. ¿Es .ods, .xlsx, .xls o .csv?"); }
+  e.target.value = "";
+};
+
+function cargarHoja() {
+  const h = leerHoja(imp.libro.Sheets[$("selHoja").value]);
+  imp.filas = h.filas; imp.r0 = h.r0;
+  imp.hdr = detectarEncabezado(h.filas);
+  const encabezado = h.filas[imp.hdr] || [];
+  const opciones = '<option value="-1">(ninguna)</option>' + encabezado.map((c, i) =>
+    `<option value="${i}">${letraCol(i)} – ${esc(textoCelda(c) || "(vacía)")}</option>`).join("");
+  const auto = columnasAuto(encabezado);
+  Object.entries(selCols).forEach(([k, id]) => { $(id).innerHTML = opciones; $(id).value = String(auto[k]); });
+  vistaPrevia();
+}
+
+function productosImportar() {
+  const cols = {};
+  Object.entries(selCols).forEach(([k, id]) => cols[k] = +$(id).value);
+  const max = Math.max(1, Math.min(10, parseInt($("palabras").value, 10) || 3));
+  return construirProductos(imp.filas, imp.hdr, imp.r0, cols, max, $("mayus").checked);
+}
+
+function vistaPrevia() {
+  const { productos, sinPrecio } = productosImportar();
+  const listas = Math.ceil(productos.length / MAX_LISTA);
+  $("importar").disabled = productos.length === 0;
+  $("importar").textContent = productos.length
+    ? `Crear ${listas > 1 ? listas + " listas" : "lista"} con ${productos.length} productos` : "Crear lista";
+  let aviso = productos.length
+    ? `Se encontraron ${productos.length} productos. Vista previa de los primeros 5:`
+    : "No se encontraron productos. Revisa qué columna es la descripción y cuál el precio.";
+  if (listas > 1) aviso += ` Como una lista admite ${MAX_LISTA}, se dividirá en ${listas} listas.`;
+  if (sinPrecio.length) aviso += ` Se omitirán ${sinPrecio.length} fila(s) sin precio válido (filas ${sinPrecio.slice(0, 8).join(", ")}${sinPrecio.length > 8 ? "…" : ""}).`;
+  $("msgImp").textContent = aviso;
+  $("vistaImp").innerHTML = productos.length ? `<table>
+    <tr><th>Nombre</th><th>Detalle</th><th>Código</th><th>Medida</th><th>Precio</th></tr>
+    ${productos.slice(0, 5).map(p => `<tr><td>${esc(p.nombre)}</td><td>${esc(p.detalle)}</td><td>${esc(p.codigo)}</td><td>${esc(p.medida)}</td><td class="num">${esc(formatoPrecio(p.precio))}</td></tr>`).join("")}
+    </table>` : "";
+}
+
+$("selHoja").onchange = cargarHoja;
+Object.values(selCols).forEach(id => $(id).onchange = vistaPrevia);
+$("palabras").oninput = vistaPrevia;
+
+$("cancelarImp").onclick = () => { $("panelImp").hidden = true; };
+
+$("importar").onclick = async () => {
+  const { productos } = productosImportar();
+  if (!productos.length) return;
+  const base = $("nombreImp").value.trim() || "Importada";
+  const partes = [];
+  for (let i = 0; i < productos.length; i += MAX_LISTA) partes.push(productos.slice(i, i + MAX_LISTA));
+  const nuevas = partes.map((prods, k) => {
+    const l = listaVacia(partes.length > 1 ? `${base} (parte ${k + 1})` : base);
+    l.creada += k;  // conserva el orden
+    l.productos = prods;
+    return l;
+  });
+  db.listas.push(...nuevas);
+  db.activa = nuevas[0].id;
+  editIdx = null; limpiarCampos();
+  $("buscar").value = "";
+  $("panelImp").hidden = true;
+  pintar();
+  $("estado").textContent = nuevas.length > 1
+    ? `Listo: se crearon ${nuevas.length} listas con ${productos.length} productos en total.`
+    : `Listo: se creó la lista "${titulo(nuevas[0])}" con ${productos.length} productos.`;
+  guardarActiva();
+  for (const l of nuevas) await guardar(l);
+};
+
+iniciar();
+</script>
+</body>
+</html>
