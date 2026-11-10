@@ -131,8 +131,45 @@ def llenar_etiqueta(page, pos, p):
     escribir(page, NEGRITA, 552 - medir(NEGRITA, c, 54.3), pos["cent"], c, 54.3)
 
 
-def construir_pdf(productos):
-    """Devuelve el PDF como bytes (lo usa también la página web)."""
+def construir_pdf(productos, por_hoja=2):
+    """Devuelve el PDF como bytes (lo usa también la página web).
+
+    por_hoja = 2  -> plantilla original (2 etiquetas grandes por hoja carta)
+    por_hoja = 8  -> las mismas etiquetas al 50 %, en 2 columnas x 4 filas
+    """
+    if por_hoja == 8:
+        # Una hoja de origen por etiqueta, usando siempre el diseño de la etiqueta de arriba
+        doc = _hojas_de_ocho(_hojas_de_dos(productos, solo_arriba=True), len(productos))
+    else:
+        doc = _hojas_de_dos(productos)
+    try:
+        doc.subset_fonts()  # deja solo los caracteres usados de cada fuente
+    except Exception:
+        pass
+    return doc.tobytes(garbage=4, deflate=True)
+
+
+def _hojas_de_ocho(doc2, n):
+    """Toma las hojas de 2 etiquetas y acomoda cada etiqueta (media hoja) reducida
+    en una cuadrícula de 2 columnas x 4 filas. Es el mismo diseño, solo más chico:
+    media hoja de ancho x un cuarto de alto conserva la proporción."""
+    W, H = doc2[0].rect.width, doc2[0].rect.height
+    margen = 6  # puntos de aire alrededor de cada etiqueta
+    salida = pymupdf.open()
+    for k in range(n):
+        if k % 8 == 0:
+            hoja = salida.new_page(width=W, height=H)
+        fila, col = divmod(k % 8, 2)
+        celda = pymupdf.Rect(col * W / 2, fila * H / 4, (col + 1) * W / 2, (fila + 1) * H / 4)
+        destino = pymupdf.Rect(celda.x0 + margen, celda.y0 + margen, celda.x1 - margen, celda.y1 - margen)
+        # La etiqueta de arriba de la hoja k. Se corta 8 pt antes de la mitad para que no
+        # asome la punta del logo de la etiqueta de abajo.
+        recorte = pymupdf.Rect(0, 0, W, H / 2 - 8)
+        hoja.show_pdf_page(destino, doc2, k, clip=recorte)
+    return salida
+
+
+def _hojas_de_dos(productos, solo_arriba=False):
     # Se limpia la plantilla UNA vez: borra solo los textos de ejemplo
     # (T, 1, 00, $, .18) y deja el diseño. Después se copia para cada hoja.
     plantilla = pymupdf.open(PLANTILLA)
@@ -143,21 +180,18 @@ def construir_pdf(productos):
     base.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE,
                           graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
     salida = pymupdf.open()
-    for i in range(0, len(productos), 2):
+    paso = 1 if solo_arriba else 2
+    for i in range(0, len(productos), paso):
         salida.insert_pdf(plantilla, from_page=0, to_page=0)
         page = salida[-1]
-        par = productos[i:i + 2] + [None] * (2 - len(productos[i:i + 2]))
+        par = productos[i:i + paso] + [None] * (2 - len(productos[i:i + paso]))
         for pos, prod in zip(ETIQUETAS, par):
             llenar_etiqueta(page, pos, prod)
-    try:
-        salida.subset_fonts()  # deja solo los caracteres usados de cada fuente
-    except Exception:
-        pass
-    return salida.tobytes(garbage=4, deflate=True)
+    return salida
 
 
-def generar(productos):
-    datos = construir_pdf(productos)
+def generar(productos, por_hoja=2):
+    datos = construir_pdf(productos, por_hoja)
     with open(SALIDA, "wb") as f:
         f.write(datos)
     print(f"\nListo: {SALIDA} ({len(productos)} etiquetas)")
