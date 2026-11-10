@@ -46,6 +46,14 @@
   .cab { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
   .cab h2 { margin:0; }
   .cab .acc { display:flex; gap:8px; flex-wrap:wrap; }
+  .plantilla { display:flex; gap:6px; }
+  label.opcion {
+    display:flex; align-items:center; gap:6px; margin:0; padding:9px 12px; cursor:pointer;
+    font-size:13px; font-weight:500; color:var(--suave); background:#2b2b2b;
+    border:1px solid var(--borde); border-radius:10px; white-space:nowrap;
+  }
+  label.opcion:has(input:checked) { color:var(--texto); border-color:var(--acento); background:#2c3550; }
+  label.opcion input { accent-color:var(--acento); margin:0; }
   .tabla { max-height:calc(100vh - 210px); overflow:auto; margin-top:8px; }
   .tabla th { position:sticky; top:0; background:var(--card); z-index:1; }
   .res { display:grid; grid-template-columns:1fr auto auto; gap:8px; align-items:center; padding:10px 0; border-bottom:1px solid var(--borde); }
@@ -116,10 +124,12 @@
     <input type="text" id="buscar" placeholder="Buscar lista..." autocomplete="off">
     <div id="listas"></div>
     <div class="pie">
+      <div class="msg" id="sesion" style="margin:0" hidden></div>
       <div class="msg" id="nube" style="margin:0">Conectando...</div>
       <button id="respaldar">Descargar respaldo</button>
       <button id="restaurar">Restaurar respaldo</button>
       <input type="file" id="archivo" accept=".json" hidden>
+      <button id="salir" hidden>Cerrar sesión</button>
     </div>
   </aside>
   <div id="velo"></div>
@@ -191,6 +201,10 @@
       <div class="cab">
         <h2>Productos (<span id="contador">0</span>)</h2>
         <div class="acc">
+          <div class="plantilla" title="Plantilla del PDF">
+            <label class="opcion"><input type="radio" name="plantilla" value="2" checked> 2 por hoja</label>
+            <label class="opcion"><input type="radio" name="plantilla" value="8"> 8 por hoja</label>
+          </div>
           <button class="primary" id="generar" disabled>Generar PDF de esta lista</button>
           <button class="danger" id="limpiar" disabled>Vaciar lista</button>
         </div>
@@ -334,7 +348,23 @@ async function iniciar() {
     aviso("Modo local: las listas se guardan solo en este navegador.", true);
   }
   pintar();
+  cargarSesion();
 }
+
+// Si la página tiene login, muestra quién está dentro y el botón de salir
+async function cargarSesion() {
+  try {
+    const r = await fetch("/api/yo");
+    if (!r.ok) return;
+    const y = await r.json();
+    if (y && y.auth) {
+      $("sesion").textContent = "Sesión: " + (y.usuario || "");
+      $("sesion").hidden = false;
+      $("salir").hidden = false;
+    }
+  } catch (e) {}
+}
+$("salir").onclick = () => { location.href = "/salir"; };
 
 $("actualizar").onclick = async () => {
   if (!nube) return aviso("Modo local: no hay nube que actualizar.", true);
@@ -493,17 +523,33 @@ $("limpiar").onclick = () => {
 };
 
 // ---------- PDF ----------
+const PLANTILLA = "etiquetas_plantilla";
+function plantillaElegida() {
+  const r = document.querySelector('input[name="plantilla"]:checked');
+  return r ? r.value : "2";
+}
+// Recuerda la última plantilla usada en este navegador
+try {
+  const g = localStorage.getItem(PLANTILLA);
+  const r = g && document.querySelector(`input[name="plantilla"][value="${g}"]`);
+  if (r) r.checked = true;
+} catch (e) {}
+document.querySelectorAll('input[name="plantilla"]').forEach(r =>
+  r.addEventListener("change", () => { try { localStorage.setItem(PLANTILLA, plantillaElegida()); } catch (e) {} }));
+
 $("generar").onclick = async () => {
   const l = activa();
+  const por = plantillaElegida();
   $("estado").textContent = "Generando PDF...";
   $("generar").disabled = true;
   try {
-    const r = await fetch("/generar", {method: "POST", headers: JSON_H, body: JSON.stringify(l.productos)});
+    const r = await fetch("/generar?plantilla=" + por, {method: "POST", headers: JSON_H, body: JSON.stringify(l.productos)});
     if (r.status === 401) { location.href = "/login"; return; }
     if (!r.ok) throw new Error((await r.json()).error || "Error al generar");
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
-    const archivo = titulo(l).replace(/\//g, "-").replace(/[^\w\-. ()]+/g, "_").trim() || "etiquetas";
+    const archivo = (titulo(l).replace(/\//g, "-").replace(/[^\w\-. ()]+/g, "_").trim() || "etiquetas")
+      + (por === "8" ? " (8 por hoja)" : "");
     const a = document.createElement("a");
     a.href = url; a.download = archivo + ".pdf"; a.click();
     window.open(url, "_blank");

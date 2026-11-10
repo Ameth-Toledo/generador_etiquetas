@@ -7,7 +7,8 @@ Local:     pip install flask pymupdf   y   python app.py   -> http://localhost:5
 Variables de entorno en Vercel:
   UPSTASH_REDIS_REST_URL / _TOKEN  (o KV_REST_API_URL / _TOKEN, o STORAGE_REST_API_URL / _TOKEN)
       -> las agrega solas la integración de Upstash.
-  APP_PASSWORD   (opcional) contraseña de acceso a la página.
+  USUARIOS       (opcional) usuarios con login, en JSON (ver crear_usuarios.py).
+  APP_PASSWORD   (opcional) una sola contraseña compartida, si no usas USUARIOS.
   SECRET_KEY     (opcional) texto largo al azar para firmar la sesión.
 """
 import hashlib
@@ -41,8 +42,9 @@ HASH_LISTAS = "etiquetas:listas"
 CAMPOS = ("nombre", "detalle", "codigo", "medida", "precio")
 
 app.secret_key = os.environ.get("SECRET_KEY") or hashlib.sha256(
-    ("etiquetas|" + PASSWORD + "|" + (REDIS_TOKEN or "")).encode()).hexdigest()
+    ("etiquetas|" + PASSWORD + "|" + os.environ.get("USUARIOS", "") + "|" + (REDIS_TOKEN or "")).encode()).hexdigest()
 app.permanent_session_lifetime = timedelta(days=30)
+app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=bool(os.environ.get("VERCEL")))
 
 
 # ---------------------------------------------------------------- Redis ----
@@ -73,6 +75,73 @@ def limpiar_lista(d, id_):
 
 
 # ---------------------------------------------------------------- Acceso ----
+# Usuarios en la variable de entorno USUARIOS (JSON). Las contraseñas se guardan
+# como hash, nunca en texto. Se generan con:  python crear_usuarios.py
+def hacer_clave(clave, sal=None):
+    sal = sal or os.urandom(16)
+    h = hashlib.pbkdf2_hmac("sha256", clave.encode(), sal, 200_000)
+    return f"v1.{sal.hex()}.{h.hex()}"
+
+
+def clave_ok(clave, guardada):
+    try:
+        _, sal, h = guardada.split(".")
+        calc = hashlib.pbkdf2_hmac("sha256", clave.encode(), bytes.fromhex(sal), 200_000)
+        return hmac.compare_digest(calc.hex(), h)
+    except Exception:
+        return False
+
+
+def _cargar_usuarios():
+    crudo = os.environ.get("USUARIOS", "").strip()
+    if not crudo:
+        return []
+    try:
+        return [{"usuario": str(u["usuario"]), "correo": str(u.get("correo", "")),
+                 "clave": str(u["clave"])} for u in json.loads(crudo)]
+    except Exception:
+        print("USUARIOS no es un JSON válido: nadie podrá entrar hasta corregirlo.")
+        return []
+
+
+USUARIOS = _cargar_usuarios()
+# Si USUARIOS existe (aunque esté mal escrito) hay login: así nunca queda abierta por error.
+AUTH = bool(os.environ.get("USUARIOS", "").strip() or PASSWORD)
+CLAVE_FALSA = hacer_clave("sin-usuario")  # para tardar igual cuando el usuario no existe
+MAX_INTENTOS = 8
+
+
+def _ip():
+    return request.headers.get("x-forwarded-for", "").split(",")[0].strip() or request.remote_addr or "?"
+
+
+def _clave_intentos():
+    return f"etiquetas:intentos:{_ip()}"
+
+
+def bloqueado():
+    try:
+        return int(redis("GET", _clave_intentos()) or 0) >= MAX_INTENTOS
+    except Exception:
+        return False
+
+
+def registrar_fallo():
+    try:
+        n = redis("INCR", _clave_intentos())
+        if n == 1:
+            redis("EXPIRE", _clave_intentos(), 900)  # se olvida a los 15 minutos
+    except Exception:
+        pass
+
+
+def limpiar_fallos():
+    try:
+        redis("DEL", _clave_intentos())
+    except Exception:
+        pass
+
+
 LOGIN = """<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Entrar</title>
 <link rel="icon" type="image/png" href="/logo-etiquetas.png">
@@ -80,20 +149,33 @@ LOGIN = """<!doctype html><html lang="es"><head><meta charset="utf-8">
 <style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#191919;color:#f1f1f1;font-family:'Poppins',sans-serif;color-scheme:dark}
 form{background:#222;border:1px solid #383838;border-radius:14px;padding:26px;width:min(92vw,340px)}
+img{display:block;width:56px;height:56px;object-fit:contain;margin:0 0 12px}
 h1{font-size:20px;margin:0 0 16px;font-weight:600}
+label{display:block;font-size:13px;color:#a3a3a3;margin:12px 0 5px}
 input{width:100%;padding:11px 12px;font-size:15px;font-family:inherit;color:#f1f1f1;background:#1d1d1d;border:1px solid #383838;border-radius:10px;box-sizing:border-box}
 input:focus{outline:2px solid #4f7cff}
-button{margin-top:12px;width:100%;padding:11px;font-size:15px;font-family:inherit;font-weight:600;color:#fff;background:#4f7cff;border:0;border-radius:10px;cursor:pointer}
-p{color:#ff6b6b;font-size:13px;margin:10px 0 0}
+button{margin-top:16px;width:100%;padding:11px;font-size:15px;font-family:inherit;font-weight:600;color:#fff;background:#4f7cff;border:0;border-radius:10px;cursor:pointer}
+p{color:#ff6b6b;font-size:13px;margin:12px 0 0}
 </style></head><body><form method="post">
+<img src="/logo-etiquetas.png" alt="" onerror="this.remove()">
 <h1>Generador de etiquetas</h1>
-<input type="password" name="clave" placeholder="Contraseña" autofocus>
+__USUARIO__
+<label for="clave">Contraseña</label>
+<input type="password" id="clave" name="clave" autocomplete="current-password" required>
 <button>Entrar</button>__ERROR__</form></body></html>"""
+
+CAMPO_USUARIO = """<label for="usuario">Correo o usuario</label>
+<input type="text" id="usuario" name="usuario" autocomplete="username" autocapitalize="none" autofocus required>"""
+
+
+def pagina_login(error=""):
+    html = LOGIN.replace("__USUARIO__", CAMPO_USUARIO if USUARIOS else "")
+    return html.replace("__ERROR__", f"<p>{error}</p>" if error else "")
 
 
 @app.before_request
 def proteger():
-    if not PASSWORD or request.path in ("/login", "/ping", "/logo-etiquetas.png") or session.get("ok"):
+    if not AUTH or request.path in ("/login", "/ping", "/logo-etiquetas.png") or session.get("ok"):
         return None
     if request.path.startswith("/api/") or request.path == "/generar":
         return jsonify(error="No autorizado"), 401
@@ -102,15 +184,41 @@ def proteger():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    if not PASSWORD:
+    if not AUTH:
         return redirect("/")
-    if request.method == "POST":
-        if hmac.compare_digest(request.form.get("clave", "").encode(), PASSWORD.encode()):
-            session.permanent = True
-            session["ok"] = True
-            return redirect("/")
-        return LOGIN.replace("__ERROR__", "<p>Contraseña incorrecta.</p>"), 401
-    return LOGIN.replace("__ERROR__", "")
+    if request.method == "GET":
+        return pagina_login()
+    if bloqueado():
+        return pagina_login("Demasiados intentos. Espera 15 minutos."), 429
+    clave = request.form.get("clave", "")
+    nombre = None
+    if USUARIOS:
+        ident = request.form.get("usuario", "").strip().lower()
+        u = next((x for x in USUARIOS if ident and ident in (x["usuario"].lower(), x["correo"].lower())), None)
+        if clave_ok(clave, u["clave"] if u else CLAVE_FALSA) and u:
+            nombre = u["usuario"]
+    elif PASSWORD and hmac.compare_digest(clave.encode(), PASSWORD.encode()):
+        nombre = "Usuario"
+    if not nombre:
+        registrar_fallo()
+        return pagina_login("Usuario o contraseña incorrectos."), 401
+    limpiar_fallos()
+    session.clear()
+    session.permanent = True
+    session["ok"] = True
+    session["usuario"] = nombre
+    return redirect("/")
+
+
+@app.get("/salir")
+def salir():
+    session.clear()
+    return redirect("/login" if AUTH else "/")
+
+
+@app.get("/api/yo")
+def api_yo():
+    return jsonify(auth=AUTH, usuario=session.get("usuario"))
 
 
 # ------------------------------------------------------------------ API ----
@@ -197,7 +305,8 @@ def generar():
             prod = {k: str(p.get(k, "")).strip() for k in CAMPOS}
             etiquetas.separar_precio(prod["precio"])  # valida el precio
             limpios.append(prod)
-        pdf = etiquetas.construir_pdf(limpios)
+        por_hoja = 8 if request.args.get("plantilla") == "8" else 2
+        pdf = etiquetas.construir_pdf(limpios, por_hoja)
     except ValueError:
         return jsonify(error="Hay un precio que no es válido."), 400
     return send_file(io.BytesIO(pdf), mimetype="application/pdf",
