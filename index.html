@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Generador de etiquetas</title>
 <link rel="icon" type="image/png" href="/logo-etiquetas.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icono-192.png">
+<meta name="theme-color" content="#191919">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
@@ -129,6 +132,7 @@
       <button id="respaldar">Descargar respaldo</button>
       <button id="restaurar">Restaurar respaldo</button>
       <input type="file" id="archivo" accept=".json" hidden>
+      <button id="instalar" hidden>⬇ Instalar en esta PC</button>
       <button id="salir" hidden>Cerrar sesión</button>
     </div>
   </aside>
@@ -852,6 +856,25 @@ $("importar").onclick = async () => {
   guardarActiva();
   for (const l of nuevas) await guardar(l);
 };
+
+// ---------- App instalable (PWA) ----------
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
+let eventoInstalar = null;
+window.addEventListener("beforeinstallprompt", e => {
+  e.preventDefault();          // guardamos el aviso para mostrarlo con nuestro botón
+  eventoInstalar = e;
+  $("instalar").hidden = false;
+});
+$("instalar").onclick = async () => {
+  if (!eventoInstalar) return;
+  eventoInstalar.prompt();
+  await eventoInstalar.userChoice;
+  eventoInstalar = null;
+  $("instalar").hidden = true;
+};
+window.addEventListener("appinstalled", () => { $("instalar").hidden = true; });
 
 iniciar();
 </script>

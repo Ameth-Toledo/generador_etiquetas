@@ -20,8 +20,10 @@ import re
 import time
 import urllib.request
 from datetime import timedelta
+from functools import lru_cache
 
-from flask import Flask, jsonify, redirect, request, send_file, session
+import pymupdf
+from flask import Flask, Response, jsonify, redirect, request, send_file, session
 
 import etiquetas
 
@@ -142,6 +144,10 @@ def limpiar_fallos():
         pass
 
 
+# Rutas que el navegador pide sin sesión (no tienen datos): login, ping, logo y archivos de la app instalable
+PUBLICAS = ("/login", "/ping", "/logo-etiquetas.png", "/manifest.webmanifest", "/sw.js",
+            "/icono-192.png", "/icono-512.png")
+
 LOGIN = """<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Entrar</title>
 <link rel="icon" type="image/png" href="/logo-etiquetas.png">
@@ -175,7 +181,7 @@ def pagina_login(error=""):
 
 @app.before_request
 def proteger():
-    if not AUTH or request.path in ("/login", "/ping", "/logo-etiquetas.png") or session.get("ok"):
+    if not AUTH or request.path in PUBLICAS or session.get("ok"):
         return None
     if request.path.startswith("/api/") or request.path == "/generar":
         return jsonify(error="No autorizado"), 401
@@ -278,6 +284,88 @@ def ping():
 
 # ------------------------------------------------------------------ Web ----
 HTML = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html"), encoding="utf-8").read()
+
+
+# ------------------------------------------------- App instalable (PWA) ----
+AQUI = os.path.dirname(os.path.abspath(__file__))
+
+
+@lru_cache(maxsize=4)
+def _icono(tam):
+    """Icono cuadrado (PNG) hecho con logo-etiquetas.png sobre fondo blanco.
+    Si el logo no está, dibuja uno sencillo para que la app se pueda instalar igual."""
+    doc = pymupdf.open()
+    pg = doc.new_page(width=tam, height=tam)
+    ruta = os.path.join(AQUI, "logo-etiquetas.png")
+    if os.path.exists(ruta):
+        pg.draw_rect(pg.rect, color=None, fill=(1, 1, 1))
+        m = tam * 0.12
+        pg.insert_image(pymupdf.Rect(m, m, tam - m, tam - m), filename=ruta, keep_proportion=True)
+    else:
+        pg.draw_rect(pg.rect, color=None, fill=(0.31, 0.49, 1.0))
+        size = tam * 0.6
+        ancho = pymupdf.get_text_length("E", fontname="hebo", fontsize=size)
+        pg.insert_text(((tam - ancho) / 2, tam / 2 + size * 0.35), "E",
+                       fontname="hebo", fontsize=size, color=(1, 1, 1))
+    return pg.get_pixmap(alpha=False).tobytes("png")
+
+
+@app.get("/icono-<int:tam>.png")
+def icono(tam):
+    if tam not in (192, 512):
+        return "", 404
+    return Response(_icono(tam), mimetype="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/manifest.webmanifest")
+def manifiesto():
+    datos = {
+        "id": "/",
+        "name": "Generador de etiquetas",
+        "short_name": "Etiquetas",
+        "description": "Genera etiquetas de precio en PDF.",
+        "lang": "es",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": "#191919",
+        "theme_color": "#191919",
+        "icons": [
+            {"src": "/icono-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        ],
+    }
+    return Response(json.dumps(datos), mimetype="application/manifest+json")
+
+
+SERVICE_WORKER = """// Service worker mínimo: hace la página instalable y avisa si no hay internet.
+// No guarda listas ni respuestas de la API (siempre se piden en línea).
+const CACHE = "etiquetas-v1";
+const SIN_RED = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>" +
+  "<title>Sin conexión</title><body style='font-family:system-ui,sans-serif;background:#191919;color:#f1f1f1;" +
+  "display:grid;place-items:center;min-height:100vh;margin:0;text-align:center'><div><h1>Sin conexión</h1>" +
+  "<p>Conéctate a internet para usar el generador de etiquetas.</p></div>";
+
+self.addEventListener("install", e => {
+  e.waitUntil(caches.open(CACHE)
+    .then(c => c.put("/sin-conexion", new Response(SIN_RED, {headers: {"Content-Type": "text/html; charset=utf-8"}})))
+    .then(() => self.skipWaiting()));
+});
+
+self.addEventListener("activate", e => e.waitUntil(self.clients.claim()));
+
+self.addEventListener("fetch", e => {
+  if (e.request.mode === "navigate") {
+    e.respondWith(fetch(e.request).catch(() => caches.match("/sin-conexion")));
+  }
+});
+"""
+
+
+@app.get("/sw.js")
+def service_worker():
+    return Response(SERVICE_WORKER, mimetype="application/javascript",
+                    headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
 
 
 @app.get("/logo-etiquetas.png")
