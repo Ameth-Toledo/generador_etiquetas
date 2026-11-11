@@ -1,3 +1,3 @@
 flask
-pymupdf
+pymupdf==1.28.2
 fonttools
