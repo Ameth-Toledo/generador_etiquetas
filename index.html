@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Generador de etiquetas</title>
+<title>Generador de etiquetas by Ameth Toledo</title>
 <link rel="icon" type="image/png" href="/logo-etiquetas.png">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icono-192.png">
@@ -29,6 +29,10 @@
     padding:16px; position:sticky; top:0; height:100vh; display:flex; flex-direction:column; gap:10px;
   }
   .logo { font-weight:600; font-size:17px; margin-bottom:2px; display:flex; justify-content:space-between; align-items:center; }
+  .logo { font-size:16px; line-height:1.25; }
+  .by { font-size:12px; font-weight:400; color:var(--suave); margin-top:2px; }
+  .by a { color:var(--acento); text-decoration:none; }
+  .by a:hover { text-decoration:underline; }
   #listas { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; margin:0 -4px; padding:0 4px; }
   button.item {
     display:flex; justify-content:space-between; gap:8px; width:100%; text-align:left;
@@ -57,7 +61,10 @@
   }
   label.opcion:has(input:checked) { color:var(--texto); border-color:var(--acento); background:#2c3550; }
   label.opcion input { accent-color:var(--acento); margin:0; }
-  .tabla { max-height:calc(100vh - 210px); overflow:auto; margin-top:8px; }
+  .busq { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:10px 0 4px; }
+  .busq input[type=text] { flex:1; min-width:220px; }
+  tr.resaltada td { background:#2f3a24; }
+  .tabla { max-height:calc(100vh - 260px); overflow:auto; margin-top:8px; }
   .tabla th { position:sticky; top:0; background:var(--card); z-index:1; }
   .res { display:grid; grid-template-columns:1fr auto auto; gap:8px; align-items:center; padding:10px 0; border-bottom:1px solid var(--borde); }
   .res .info { min-width:0; font-size:13px; }
@@ -120,7 +127,13 @@
 <div class="app">
 
   <aside>
-    <div class="logo"><span>Etiquetas</span><button id="cerrarMenu" class="solo-movil" style="padding:4px 10px">✕</button></div>
+    <div class="logo">
+      <div>
+        <div>Generador de etiquetas</div>
+        <div class="by">by <a href="https://www.amethdev.com/" target="_blank" rel="noopener noreferrer">Ameth Toledo</a></div>
+      </div>
+      <button id="cerrarMenu" class="solo-movil" style="padding:4px 10px">✕</button>
+    </div>
     <button class="primary" id="nuevaLista">+ Nueva lista</button>
     <button id="btnArchivo">⬆ Importar archivo</button>
     <input type="file" id="archivoImp" accept=".ods,.xlsx,.xls,.csv" hidden>
@@ -207,11 +220,17 @@
         <div class="acc">
           <div class="plantilla" title="Plantilla del PDF">
             <label class="opcion"><input type="radio" name="plantilla" value="2" checked> 2 por hoja</label>
+            <label class="opcion"><input type="radio" name="plantilla" value="4"> 4 por hoja</label>
             <label class="opcion"><input type="radio" name="plantilla" value="8"> 8 por hoja</label>
           </div>
           <button class="primary" id="generar" disabled>Generar PDF de esta lista</button>
           <button class="danger" id="limpiar" disabled>Vaciar lista</button>
         </div>
+      </div>
+      <div class="busq">
+        <input type="text" id="filtro" placeholder="Buscar producto: código, nombre, detalle..." autocomplete="off">
+        <label class="check"><input type="checkbox" id="enTodas"> En todas las listas</label>
+        <span class="nota" id="conteoFiltro" style="margin:0"></span>
       </div>
       <div class="msg" id="estado" style="margin:0 0 4px"></div>
       <div id="lista"></div>
@@ -232,6 +251,7 @@ let nube = false;
 let editIdx = null;
 let copiaActiva = null;   // lista para la que se pintaron los resultados de "copiar"
 let resultadosCopia = [];
+let resaltar = null;      // número del producto que se resalta unos segundos tras "Ver en su lista"
 
 function nuevoId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
@@ -404,9 +424,19 @@ function pintar() {
   $("agregar").textContent = editIdx === null ? "Agregar a esta lista" : "Guardar cambios";
   $("cancelarEdicion").hidden = editIdx === null;
   if (copiaActiva !== l.id) { copiaActiva = l.id; $("msgCopia").textContent = ""; pintarCopia(); }
-  if (!l.productos.length) { $("lista").innerHTML = '<div class="vacio">Esta lista todavía no tiene productos.</div>'; return; }
-  const filas = l.productos.map((p, i) => `
-    <tr ${i === editIdx ? 'style="background:#2c3550"' : ""}>
+  const t = normal($("filtro").value);
+  if (t && $("enTodas").checked) return pintarGlobal(t);   // buscar en todas las listas
+  if (!l.productos.length) {
+    $("conteoFiltro").textContent = "";
+    $("lista").innerHTML = '<div class="vacio">Esta lista todavía no tiene productos.</div>';
+    return;
+  }
+  // Se conserva el número real de cada producto (i) aunque se filtre, para que Editar/Quitar apunten bien
+  const visibles = l.productos.map((p, i) => ({ p, i })).filter(x => coincide(x.p, t));
+  $("conteoFiltro").textContent = t ? `${visibles.length} de ${l.productos.length}` : "";
+  if (!visibles.length) { $("lista").innerHTML = '<div class="vacio">Ningún producto de esta lista coincide con la búsqueda.</div>'; return; }
+  const filas = visibles.map(({ p, i }) => `
+    <tr data-fila="${i}" class="${i === resaltar ? "resaltada" : ""}" ${i === editIdx ? 'style="background:#2c3550"' : ""}>
       <td>${i + 1}</td><td>${esc(p.nombre)}</td><td>${esc(p.detalle)}</td>
       <td>${esc(p.codigo)}</td><td>${esc(p.medida)}</td>
       <td class="num">${esc(formatoPrecio(p.precio))}</td>
@@ -414,6 +444,24 @@ function pintar() {
     </tr>`).join("");
   $("lista").innerHTML = `<div class="tabla"><table>
     <tr><th>#</th><th>Nombre</th><th>Detalle</th><th>Código</th><th>Medida</th><th>Precio</th><th></th></tr>${filas}</table></div>`;
+}
+
+// Resultados de buscar en TODAS las listas
+function pintarGlobal(t) {
+  const res = buscarEnTodas(db.listas, t, 200);
+  $("conteoFiltro").textContent = res.length >= 200 ? "200 o más resultados (afina la búsqueda)" : `${res.length} resultado(s) en todas las listas`;
+  if (!res.length) { $("lista").innerHTML = '<div class="vacio">No hay productos que coincidan en ninguna lista.</div>'; return; }
+  const filas = res.map(r => `
+    <tr>
+      <td>${esc(titulo(r.lista))}</td><td>${esc(r.p.nombre)}</td><td>${esc(r.p.detalle)}</td>
+      <td>${esc(r.p.codigo)}</td><td>${esc(r.p.medida)}</td>
+      <td class="num">${esc(formatoPrecio(r.p.precio))}</td>
+      <td style="white-space:nowrap">
+        <button data-g="editar" data-lista="${r.lista.id}" data-idx="${r.i}">Editar</button>
+        <button data-g="ir" data-lista="${r.lista.id}" data-idx="${r.i}">Ver en su lista</button></td>
+    </tr>`).join("");
+  $("lista").innerHTML = `<div class="tabla"><table>
+    <tr><th>Lista</th><th>Nombre</th><th>Detalle</th><th>Código</th><th>Medida</th><th>Precio</th><th></th></tr>${filas}</table></div>`;
 }
 
 function limpiarCampos() { campos.forEach(c => $(c).value = ""); }
@@ -428,7 +476,7 @@ $("velo").onclick = cerrarMenu;
 $("listas").onclick = e => {
   const b = e.target.closest("[data-id]");
   if (!b) return;
-  db.activa = b.dataset.id; editIdx = null; limpiarCampos();
+  db.activa = b.dataset.id; editIdx = null; limpiarCampos(); limpiarFiltro();
   guardarActiva(); cerrarMenu(); pintar();
 };
 
@@ -439,7 +487,7 @@ $("nuevaLista").onclick = () => {
   const entrada = prompt(`Nombre de la lista (se guarda como ${hoy()}-nombre).\nDeja vacío para usar "${def}":`, "");
   if (entrada === null) return;
   const l = listaVacia(entrada.trim() || def);
-  db.listas.push(l); db.activa = l.id; editIdx = null; limpiarCampos();
+  db.listas.push(l); db.activa = l.id; editIdx = null; limpiarCampos(); limpiarFiltro();
   $("buscar").value = "";
   guardarActiva(); cerrarMenu(); pintar(); guardar(l); $("nombre").focus();
 };
@@ -455,7 +503,7 @@ $("duplicar").onclick = () => {
   const l = activa();
   const copia = listaVacia(l.nombre + " (copia)");
   copia.productos = JSON.parse(JSON.stringify(l.productos));
-  db.listas.push(copia); db.activa = copia.id; editIdx = null;
+  db.listas.push(copia); db.activa = copia.id; editIdx = null; limpiarFiltro();
   guardarActiva(); pintar(); guardar(copia);
 };
 
@@ -463,7 +511,7 @@ $("eliminarLista").onclick = async () => {
   const l = activa();
   if (!confirm(`¿Eliminar la lista "${titulo(l)}" con sus ${l.productos.length} productos? No se puede deshacer.`)) return;
   db.listas = db.listas.filter(x => x.id !== l.id);
-  editIdx = null; limpiarCampos();
+  editIdx = null; limpiarCampos(); limpiarFiltro();
   let nueva = null;
   if (!db.listas.length) { nueva = listaVacia("Lista 1"); db.listas.push(nueva); }
   db.activa = [...db.listas].sort((a, b) => (b.creada || 0) - (a.creada || 0))[0].id;
@@ -488,7 +536,7 @@ $("agregar").onclick = () => {
     l.productos.push(p);
   }
   editIdx = null;
-  limpiarCampos(); pintar(); guardar(l);
+  limpiarCampos(); limpiarFiltro(); pintar(); guardar(l);
   $("nombre").focus();
 };
 
@@ -504,7 +552,27 @@ campos.forEach((c, i) => {
   });
 });
 
+// Buscador
+function limpiarFiltro() { $("filtro").value = ""; $("enTodas").checked = false; resaltar = null; }
+$("filtro").oninput = pintar;
+$("enTodas").onchange = pintar;
+
 $("lista").onclick = e => {
+  // Resultado de buscar en todas las listas: abre esa lista y edita o resalta el producto
+  const g = e.target.dataset.g;
+  if (g) {
+    const id = e.target.dataset.lista, i = +e.target.dataset.idx;
+    db.activa = id; $("enTodas").checked = false; editIdx = null; limpiarCampos();
+    guardarActiva();
+    const p = activa().productos[i];
+    if (p && g === "editar") { campos.forEach(c => $(c).value = p[c]); editIdx = i; }
+    if (p && g === "ir") { resaltar = i; setTimeout(() => { resaltar = null; pintar(); }, 3000); }
+    pintar();
+    if (g === "editar") $("nombre").focus();
+    const fila = document.querySelector(`tr[data-fila="${i}"]`);
+    if (fila) fila.scrollIntoView({ block: "center" });
+    return;
+  }
   const l = activa();
   const b = e.target.dataset.borrar, ed = e.target.dataset.editar;
   if (b !== undefined) {
@@ -553,7 +621,7 @@ $("generar").onclick = async () => {
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
     const archivo = (titulo(l).replace(/\//g, "-").replace(/[^\w\-. ()]+/g, "_").trim() || "etiquetas")
-      + (por === "8" ? " (8 por hoja)" : "");
+      + (por === "2" ? "" : ` (${por} por hoja)`);
     const a = document.createElement("a");
     a.href = url; a.download = archivo + ".pdf"; a.click();
     window.open(url, "_blank");
@@ -725,6 +793,29 @@ function buscarProductos(listas, idActivo, consulta, nombreLista, limite) {
   }
   return [...mapa.values()].sort((a, b) => a.puntos - b.puntos).slice(0, limite || 30);
 }
+
+// ¿El producto coincide con lo buscado (t ya normalizado)? Cada palabra debe aparecer en
+// código, nombre, detalle o medida, en cualquier orden: "carretilla truper" encuentra "TRUPER CARRETILLA".
+function coincide(p, t) {
+  if (!t) return true;
+  const texto = normal([p.codigo, p.nombre, p.detalle, p.medida].join(" "));
+  return t.split(" ").every(w => texto.includes(w));
+}
+
+// Busca en TODAS las listas (la más nueva primero). Devuelve la lista, la posición (i) y el producto.
+function buscarEnTodas(listas, t, limite) {
+  const res = [];
+  const orden = [...listas].sort((a, b) => (b.creada || 0) - (a.creada || 0));
+  for (const l of orden) {
+    for (let i = 0; i < l.productos.length; i++) {
+      if (coincide(l.productos[i], t)) {
+        res.push({ lista: l, i, p: l.productos[i] });
+        if (res.length >= limite) return res;
+      }
+    }
+  }
+  return res;
+}
 // PURAS>>
 
 // ---------- Copiar productos desde otras listas ----------
@@ -846,7 +937,7 @@ $("importar").onclick = async () => {
   });
   db.listas.push(...nuevas);
   db.activa = nuevas[0].id;
-  editIdx = null; limpiarCampos();
+  editIdx = null; limpiarCampos(); limpiarFiltro();
   $("buscar").value = "";
   $("panelImp").hidden = true;
   pintar();

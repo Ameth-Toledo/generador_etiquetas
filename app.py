@@ -156,7 +156,10 @@ LOGIN = """<!doctype html><html lang="es"><head><meta charset="utf-8">
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#191919;color:#f1f1f1;font-family:'Poppins',sans-serif;color-scheme:dark}
 form{background:#222;border:1px solid #383838;border-radius:14px;padding:26px;width:min(92vw,340px)}
 img{display:block;width:56px;height:56px;object-fit:contain;margin:0 0 12px}
-h1{font-size:20px;margin:0 0 16px;font-weight:600}
+h1{font-size:20px;margin:0 0 4px;font-weight:600}
+.by{font-size:12px;color:#a3a3a3;margin:0 0 8px}
+.by a{color:#4f7cff;text-decoration:none}
+.by a:hover{text-decoration:underline}
 label{display:block;font-size:13px;color:#a3a3a3;margin:12px 0 5px}
 input{width:100%;padding:11px 12px;font-size:15px;font-family:inherit;color:#f1f1f1;background:#1d1d1d;border:1px solid #383838;border-radius:10px;box-sizing:border-box}
 input:focus{outline:2px solid #4f7cff}
@@ -165,6 +168,7 @@ p{color:#ff6b6b;font-size:13px;margin:12px 0 0}
 </style></head><body><form method="post">
 <img src="/logo-etiquetas.png" alt="" onerror="this.remove()">
 <h1>Generador de etiquetas</h1>
+<div class="by">by <a href="https://www.amethdev.com/" target="_blank" rel="noopener noreferrer">Ameth Toledo</a></div>
 __USUARIO__
 <label for="clave">Contraseña</label>
 <input type="password" id="clave" name="clave" autocomplete="current-password" required>
@@ -292,15 +296,15 @@ AQUI = os.path.dirname(os.path.abspath(__file__))
 
 @lru_cache(maxsize=4)
 def _icono(tam):
-    """Icono cuadrado (PNG) hecho con logo-etiquetas.png sobre fondo blanco.
+    """Icono cuadrado (PNG) con el logo de logo-etiquetas.png sobre fondo TRANSPARENTE.
     Si el logo no está, dibuja uno sencillo para que la app se pueda instalar igual."""
     doc = pymupdf.open()
     pg = doc.new_page(width=tam, height=tam)
     ruta = os.path.join(AQUI, "logo-etiquetas.png")
     if os.path.exists(ruta):
-        pg.draw_rect(pg.rect, color=None, fill=(1, 1, 1))
-        m = tam * 0.12
+        m = tam * 0.05
         pg.insert_image(pymupdf.Rect(m, m, tam - m, tam - m), filename=ruta, keep_proportion=True)
+        return pg.get_pixmap(alpha=True).tobytes("png")
     else:
         pg.draw_rect(pg.rect, color=None, fill=(0.31, 0.49, 1.0))
         size = tam * 0.6
@@ -393,7 +397,8 @@ def generar():
             prod = {k: str(p.get(k, "")).strip() for k in CAMPOS}
             etiquetas.separar_precio(prod["precio"])  # valida el precio
             limpios.append(prod)
-        por_hoja = 8 if request.args.get("plantilla") == "8" else 2
+        plantilla = request.args.get("plantilla")
+        por_hoja = int(plantilla) if plantilla in ("4", "8") else 2
         pdf = etiquetas.construir_pdf(limpios, por_hoja)
     except ValueError:
         return jsonify(error="Hay un precio que no es válido."), 400

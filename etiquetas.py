@@ -134,12 +134,15 @@ def llenar_etiqueta(page, pos, p):
 def construir_pdf(productos, por_hoja=2):
     """Devuelve el PDF como bytes (lo usa también la página web).
 
-    por_hoja = 2  -> plantilla original (2 etiquetas grandes por hoja carta)
-    por_hoja = 8  -> las mismas etiquetas al 50 %, en 2 columnas x 4 filas
+    por_hoja = 2  -> plantilla original (2 etiquetas grandes por hoja carta, vertical)
+    por_hoja = 4  -> las mismas etiquetas al ~64 %, 2 columnas x 2 filas en hoja carta HORIZONTAL
+    por_hoja = 8  -> las mismas etiquetas al 50 %, 2 columnas x 4 filas en hoja carta vertical
     """
-    if por_hoja == 8:
+    if por_hoja in DISENOS:
+        columnas, filas, horizontal, margen = DISENOS[por_hoja]
         # Una hoja de origen por etiqueta, usando siempre el diseño de la etiqueta de arriba
-        doc = _hojas_de_ocho(_hojas_de_dos(productos, solo_arriba=True), len(productos))
+        origen = _hojas_de_dos(productos, solo_arriba=True)
+        doc = _cuadricula(origen, len(productos), columnas, filas, horizontal, margen)
     else:
         doc = _hojas_de_dos(productos)
     try:
@@ -149,22 +152,30 @@ def construir_pdf(productos, por_hoja=2):
     return doc.tobytes(garbage=4, deflate=True)
 
 
-def _hojas_de_ocho(doc2, n):
-    """Toma las hojas de 2 etiquetas y acomoda cada etiqueta (media hoja) reducida
-    en una cuadrícula de 2 columnas x 4 filas. Es el mismo diseño, solo más chico:
-    media hoja de ancho x un cuarto de alto conserva la proporción."""
-    W, H = doc2[0].rect.width, doc2[0].rect.height
-    margen = 6  # puntos de aire alrededor de cada etiqueta
+# etiquetas por hoja -> (columnas, filas, hoja horizontal, aire alrededor de cada etiqueta en puntos)
+DISENOS = {
+    4: (2, 2, True, 8),
+    8: (2, 4, False, 6),
+}
+
+
+def _cuadricula(doc2, n, columnas, filas, horizontal, margen):
+    """Toma las etiquetas ya llenas (una por hoja de origen) y las reduce para acomodarlas
+    en una cuadrícula de columnas x filas. Es el mismo diseño en vectores, solo más chico."""
+    w0, h0 = doc2[0].rect.width, doc2[0].rect.height
+    W, H = (h0, w0) if horizontal else (w0, h0)
+    por_pagina = columnas * filas
     salida = pymupdf.open()
     for k in range(n):
-        if k % 8 == 0:
+        if k % por_pagina == 0:
             hoja = salida.new_page(width=W, height=H)
-        fila, col = divmod(k % 8, 2)
-        celda = pymupdf.Rect(col * W / 2, fila * H / 4, (col + 1) * W / 2, (fila + 1) * H / 4)
-        destino = pymupdf.Rect(celda.x0 + margen, celda.y0 + margen, celda.x1 - margen, celda.y1 - margen)
+        fila, col = divmod(k % por_pagina, columnas)
+        cw, ch = W / columnas, H / filas
+        destino = pymupdf.Rect(col * cw + margen, fila * ch + margen,
+                               (col + 1) * cw - margen, (fila + 1) * ch - margen)
         # La etiqueta de arriba de la hoja k. Se corta 8 pt antes de la mitad para que no
         # asome la punta del logo de la etiqueta de abajo.
-        recorte = pymupdf.Rect(0, 0, W, H / 2 - 8)
+        recorte = pymupdf.Rect(0, 0, w0, h0 / 2 - 8)
         hoja.show_pdf_page(destino, doc2, k, clip=recorte)
     return salida
 
