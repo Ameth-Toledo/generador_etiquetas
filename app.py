@@ -300,9 +300,11 @@ def _icono(tam):
     Si el logo no está, dibuja uno sencillo para que la app se pueda instalar igual."""
     doc = pymupdf.open()
     pg = doc.new_page(width=tam, height=tam)
-    ruta = os.path.join(AQUI, "logo-etiquetas.png")
+    ruta = os.path.join(AQUI, "logo-icono.png")
+    if not os.path.exists(ruta):
+        ruta = os.path.join(AQUI, "logo-etiquetas.png")
     if os.path.exists(ruta):
-        m = tam * 0.05
+        m = tam * 0.04
         pg.insert_image(pymupdf.Rect(m, m, tam - m, tam - m), filename=ruta, keep_proportion=True)
         return pg.get_pixmap(alpha=True).tobytes("png")
     else:
@@ -335,8 +337,8 @@ def manifiesto():
         "background_color": "#191919",
         "theme_color": "#191919",
         "icons": [
-            {"src": "/icono-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-            {"src": "/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": "/icono-192.png?v=2", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "/icono-512.png?v=2", "sizes": "512x512", "type": "image/png", "purpose": "any"},
         ],
     }
     return Response(json.dumps(datos), mimetype="application/manifest+json")
