@@ -1,0 +1,14 @@
+{
+  "functions": {
+    "app.py": {
+      "includeFiles": "{etiquetas.py,index.html,logo-etiquetas.png,PRECIOS_ALEXIS.pdf,Roboto-Bold.ttf,Roboto-Regular.ttf}",
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/ping",
+      "schedule": "0 14 * * *"
+    }
+  ]
+}

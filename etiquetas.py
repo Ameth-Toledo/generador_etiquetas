@@ -121,14 +121,17 @@ def llenar_etiqueta(page, pos, p):
     tam = ajustar(NORMAL, medida, 27.4, 230)
     escribir(page, NORMAL, 552 - medir(NORMAL, medida, tam), pos["medida"], medida, tam)
 
-    # Precio: "$" + entero centrados, centavos a la derecha
+    # Precio: "$" + entero centrados; los centavos van pegados al final del número
+    # (con tope en el borde derecho de la etiqueta, para los precios muy largos)
     entero, cent = separar_precio(p["precio"])
     texto = "$" + entero
     tam = ajustar(NEGRITA, texto, 107.7, 335)
-    x = CENTRO - 5 - medir(NEGRITA, texto, tam) / 2
+    ancho_precio = medir(NEGRITA, texto, tam)
+    x = CENTRO - 5 - ancho_precio / 2
     escribir(page, NEGRITA, x, pos["precio"], texto, tam)
     c = "." + cent
-    escribir(page, NEGRITA, 552 - medir(NEGRITA, c, 54.3), pos["cent"], c, 54.3)
+    x_cent = min(x + ancho_precio + 18, 552 - medir(NEGRITA, c, 54.3))
+    escribir(page, NEGRITA, x_cent, pos["cent"], c, 54.3)
 
 
 def construir_pdf(productos, por_hoja=2):
@@ -136,6 +139,7 @@ def construir_pdf(productos, por_hoja=2):
 
     por_hoja = 2  -> plantilla original (2 etiquetas grandes por hoja carta, vertical)
     por_hoja = 4  -> las mismas etiquetas al ~64 %, 2 columnas x 2 filas en hoja carta HORIZONTAL
+    por_hoja = 6  -> las mismas etiquetas al ~49 %, 2 columnas x 3 filas en hoja carta vertical
     por_hoja = 8  -> las mismas etiquetas al 50 %, 2 columnas x 4 filas en hoja carta vertical
     """
     if por_hoja in DISENOS:
@@ -155,6 +159,7 @@ def construir_pdf(productos, por_hoja=2):
 # etiquetas por hoja -> (columnas, filas, hoja horizontal, aire alrededor de cada etiqueta en puntos)
 DISENOS = {
     4: (2, 2, True, 8),
+    6: (2, 3, False, 4),
     8: (2, 4, False, 6),
 }
 
