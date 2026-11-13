@@ -64,6 +64,13 @@
   .busq { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:10px 0 4px; }
   .busq input[type=text] { flex:1; min-width:220px; }
   tr.resaltada td { background:#2f3a24; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.62); display:grid; place-items:center; z-index:50; padding:16px; }
+  .modal-caja { background:var(--card); border:1px solid var(--borde); border-radius:14px; padding:20px; width:min(94vw, 460px); }
+  .modal-caja h3 { margin:0 0 8px; font-size:17px; font-weight:600; }
+  .modal-caja p { margin:0 0 14px; font-size:14px; color:var(--suave); white-space:pre-line; line-height:1.5; }
+  .modal-caja .row { justify-content:flex-end; margin-top:12px; }
+  button.peligro-solido { background:var(--peligro); border-color:var(--peligro); color:#2a0d0d; font-weight:600; }
+  button.peligro-solido:hover:not(:disabled) { background:#ff8585; }
   .tabla { max-height:calc(100vh - 260px); overflow:auto; margin-top:8px; }
   .tabla th { position:sticky; top:0; background:var(--card); z-index:1; }
   .res { display:grid; grid-template-columns:1fr auto auto; gap:8px; align-items:center; padding:10px 0; border-bottom:1px solid var(--borde); }
@@ -136,6 +143,7 @@
     </div>
     <button class="primary" id="nuevaLista">+ Nueva lista</button>
     <button id="btnArchivo">⬆ Importar archivo</button>
+    <button id="btnCatalogo">📦 Catálogo de productos</button>
     <input type="file" id="archivoImp" accept=".ods,.xlsx,.xls,.csv" hidden>
     <input type="text" id="buscar" placeholder="Buscar lista..." autocomplete="off">
     <div id="listas"></div>
@@ -162,6 +170,21 @@
       <button id="duplicar">Duplicar</button>
       <button id="actualizar">↻ Actualizar</button>
       <button class="danger" id="eliminarLista">Eliminar lista</button>
+    </div>
+
+    <!-- Catálogo: todos los productos guardados, aparte de las listas -->
+    <div class="card" id="panelCat" hidden>
+      <div class="cab">
+        <h2>Catálogo de productos <span class="nota" id="catConteo" style="margin:0 0 0 6px"></span></h2>
+        <div class="acc">
+          <button id="catActualizar">↻ Actualizar</button>
+          <button id="catCerrar">Cerrar</button>
+        </div>
+      </div>
+      <div class="nota" style="margin:0 0 10px">Aquí quedan guardados todos los productos. <b>Quitar un producto de una lista, o vaciarla, no lo borra de aquí.</b> Para borrarlo definitivamente (de aquí y de todas las listas) se pide tu contraseña.</div>
+      <input type="text" id="catBuscar" placeholder="Buscar en el catálogo: código, nombre, detalle..." autocomplete="off">
+      <div class="msg" id="catEstado"></div>
+      <div id="catResultados" style="overflow-x:auto"></div>
     </div>
 
     <!-- Importar archivo: crea una lista nueva -->
@@ -221,6 +244,7 @@
           <div class="plantilla" title="Plantilla del PDF">
             <label class="opcion"><input type="radio" name="plantilla" value="2" checked> 2 por hoja</label>
             <label class="opcion"><input type="radio" name="plantilla" value="4"> 4 por hoja</label>
+            <label class="opcion"><input type="radio" name="plantilla" value="6"> 6 por hoja</label>
             <label class="opcion"><input type="radio" name="plantilla" value="8"> 8 por hoja</label>
           </div>
           <button class="primary" id="generar" disabled>Generar PDF de esta lista</button>
@@ -239,6 +263,22 @@
     </div>
   </div>
   </main>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-caja" role="dialog" aria-modal="true" aria-labelledby="modalTitulo">
+    <h3 id="modalTitulo"></h3>
+    <p id="modalTexto"></p>
+    <div id="modalClaveWrap" hidden>
+      <label for="modalClave">Contraseña</label>
+      <input type="password" id="modalClave" autocomplete="current-password">
+      <div class="msg error" id="modalError" style="margin-top:6px"></div>
+    </div>
+    <div class="row">
+      <button id="modalCancelar">Cancelar</button>
+      <button id="modalOk" class="primary">Aceptar</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -381,6 +421,7 @@ async function cargarSesion() {
     const r = await fetch("/api/yo");
     if (!r.ok) return;
     const y = await r.json();
+    requiereClave = !!(y && y.auth);
     if (y && y.auth) {
       $("sesion").textContent = "Sesión: " + (y.usuario || "");
       $("sesion").hidden = false;
@@ -509,7 +550,14 @@ $("duplicar").onclick = () => {
 
 $("eliminarLista").onclick = async () => {
   const l = activa();
-  if (!confirm(`¿Eliminar la lista "${titulo(l)}" con sus ${l.productos.length} productos? No se puede deshacer.`)) return;
+  const si = await confirmar({
+    titulo: "¿Eliminar esta lista?",
+    texto: `Se elimina la lista "${titulo(l)}" con sus ${l.productos.length} productos.\n` +
+           (nube ? "Los productos NO se borran del catálogo ni de las demás listas." : sinCatalogo),
+    ok: "Eliminar lista", peligro: true,
+  });
+  if (!si) return;
+  if (!(await catalogar(l.productos))) { $("estado").textContent = "No se eliminó: no se pudieron asegurar los productos en el catálogo."; return; }
   db.listas = db.listas.filter(x => x.id !== l.id);
   editIdx = null; limpiarCampos(); limpiarFiltro();
   let nueva = null;
@@ -537,6 +585,7 @@ $("agregar").onclick = () => {
   }
   editIdx = null;
   limpiarCampos(); limpiarFiltro(); pintar(); guardar(l);
+  catalogar([p]);   // queda también en el catálogo (agrega o actualiza)
   $("nombre").focus();
 };
 
@@ -575,11 +624,7 @@ $("lista").onclick = e => {
   }
   const l = activa();
   const b = e.target.dataset.borrar, ed = e.target.dataset.editar;
-  if (b !== undefined) {
-    l.productos.splice(+b, 1);
-    if (editIdx !== null) { editIdx = null; limpiarCampos(); }
-    pintar(); guardar(l);
-  }
+  if (b !== undefined) { quitarProducto(+b); return; }
   if (ed !== undefined) {
     const p = l.productos[+ed];
     campos.forEach(c => $(c).value = p[c]);
@@ -587,12 +632,251 @@ $("lista").onclick = e => {
   }
 };
 
-$("limpiar").onclick = () => {
-  const l = activa();
-  if (confirm(`¿Vaciar todos los productos de "${titulo(l)}"?`)) {
-    l.productos = []; editIdx = null; limpiarCampos(); pintar(); guardar(l);
+// ---------- Ventanas de confirmación ----------
+let modalFin = null, modalValidar = null;
+
+function abrirModal(op) {
+  return new Promise(resolve => {
+    modalFin = resolve;
+    modalValidar = op.validar || null;
+    $("modalTitulo").textContent = op.titulo;
+    $("modalTexto").textContent = op.texto || "";
+    $("modalClaveWrap").hidden = !op.clave;
+    $("modalClave").value = ""; $("modalError").textContent = "";
+    $("modalOk").textContent = op.ok || "Aceptar";
+    $("modalOk").className = op.peligro ? "peligro-solido" : "primary";
+    $("modalOk").disabled = false;
+    $("modal").hidden = false;
+    (op.clave ? $("modalClave") : $("modalCancelar")).focus();
+  });
+}
+function cerrarModal(valor) {
+  $("modal").hidden = true;
+  const f = modalFin; modalFin = null; modalValidar = null;
+  if (f) f(valor);
+}
+// Pregunta sí/no. Devuelve true o false.
+const confirmar = op => abrirModal(op).then(v => v === true);
+// Pide la contraseña y la comprueba con op.validar (que devuelve un texto de error, o null si todo salió bien).
+// Devuelve la contraseña escrita, o null si se cancela.
+const pedirClave = op => abrirModal({ ...op, clave: true }).then(v => typeof v === "string" ? v : null);
+
+$("modalOk").onclick = async () => {
+  if ($("modalClaveWrap").hidden) return cerrarModal(true);
+  const clave = $("modalClave").value;
+  if (!clave) { $("modalError").textContent = "Escribe tu contraseña."; return $("modalClave").focus(); }
+  if (modalValidar) {
+    $("modalOk").disabled = true; $("modalError").textContent = "Verificando...";
+    const error = await modalValidar(clave);
+    $("modalOk").disabled = false;
+    if (error) { $("modalError").textContent = error; $("modalClave").select(); return; }
   }
+  cerrarModal(clave);
 };
+$("modalCancelar").onclick = () => cerrarModal(false);
+$("modal").addEventListener("click", e => { if (e.target === $("modal")) cerrarModal(false); });
+document.addEventListener("keydown", e => {
+  if ($("modal").hidden) return;
+  if (e.key === "Escape") cerrarModal(false);
+  if (e.key === "Enter" && e.target === $("modalClave")) { e.preventDefault(); $("modalOk").click(); }
+});
+
+// ---------- Catálogo ----------
+// El catálogo guarda TODOS los productos, aparte de las listas. Una lista solo tiene copias:
+// quitar de una lista o vaciarla nunca borra del catálogo. Borrar de verdad pide contraseña.
+let requiereClave = false;   // la página tiene login: borrar del catálogo pide la contraseña
+const catalogo = { mapa: new Map(), cargado: false, cargando: false };
+const sinCatalogo = "Modo local: no hay catálogo, el producto se perdería si no está en otra lista.";
+
+// Guarda productos en el catálogo (agrega o actualiza). Devuelve true si quedaron guardados.
+// Sin nube no hay catálogo y devuelve true para no estorbar.
+async function catalogar(productos) {
+  const lista = unicos(productos);
+  if (!nube || !lista.length) return true;
+  try {
+    for (let i = 0; i < lista.length; i += 1000) {
+      const lote = lista.slice(i, i + 1000);
+      const r = await fetch("/api/catalogo", {method: "POST", headers: JSON_H, body: JSON.stringify({productos: lote})});
+      if (r.status === 401) { location.href = "/login"; return false; }
+      if (!r.ok) throw new Error();
+      const { claves } = await r.json();
+      if (catalogo.cargado) lote.forEach((p, j) => catalogo.mapa.set(claves[j], { ...p }));
+    }
+    return true;
+  } catch (e) {
+    aviso("No se pudo guardar en el catálogo. Revisa tu conexión.", true);
+    return false;
+  }
+}
+
+// Quitar un producto SOLO de la lista abierta (con confirmación). Antes se asegura de que esté en el catálogo.
+async function quitarProducto(i) {
+  const l = activa(), p = l.productos[i];
+  if (!p) return;
+  const si = await confirmar({
+    titulo: "¿Quitar de esta lista?",
+    texto: `${p.nombre}${p.codigo ? " (" + p.codigo + ")" : ""}\nSe quita solo de "${titulo(l)}".\n` +
+           (nube ? "El producto NO se borra del catálogo ni de las demás listas." : sinCatalogo),
+    ok: "Quitar", peligro: true,
+  });
+  if (!si) return;
+  if (!(await catalogar([p]))) { $("estado").textContent = "No se quitó: no se pudo asegurar el producto en el catálogo."; return; }
+  const j = l.productos.indexOf(p);
+  if (j < 0) return;
+  l.productos.splice(j, 1);
+  if (editIdx !== null) { editIdx = null; limpiarCampos(); }
+  pintar(); guardar(l);
+}
+
+$("limpiar").onclick = async () => {
+  const l = activa();
+  const n = l.productos.length;
+  const si = await confirmar({
+    titulo: "¿Vaciar esta lista?",
+    texto: `Se quitan los ${n} productos de "${titulo(l)}" y la lista queda vacía.\n` +
+           (nube ? "Los productos NO se borran del catálogo ni de las demás listas." : sinCatalogo),
+    ok: "Vaciar lista", peligro: true,
+  });
+  if (!si) return;
+  if (!(await catalogar(l.productos))) { $("estado").textContent = "No se vació: no se pudieron asegurar los productos en el catálogo."; return; }
+  l.productos = []; editIdx = null; limpiarCampos(); pintar(); guardar(l);
+};
+
+async function cargarCatalogo(forzar) {
+  if (catalogo.cargando) return;
+  if (!nube) { $("catEstado").textContent = "El catálogo necesita la conexión a la nube (ahora estás en modo local)."; return; }
+  if (catalogo.cargado && !forzar) { pintarCatalogo(); return; }
+  catalogo.cargando = true; catalogo.cargado = false; catalogo.mapa = new Map();
+  $("catEstado").textContent = "Cargando catálogo...";
+  try {
+    let cursor = "0", total = null;
+    do {
+      const r = await fetch("/api/catalogo?cursor=" + cursor);
+      if (r.status === 401) { location.href = "/login"; return; }
+      if (!r.ok) throw new Error();
+      const d = await r.json();
+      if (d.total != null) total = d.total;
+      d.productos.forEach(([k, nombre, detalle, codigo, medida, precio]) => catalogo.mapa.set(k, { nombre, detalle, codigo, medida, precio }));
+      cursor = d.cursor;
+      $("catEstado").textContent = `Cargando catálogo... ${catalogo.mapa.size} de ${total == null ? "?" : total}`;
+    } while (cursor !== "0");
+    // Primera vez: el catálogo está vacío pero ya hay productos en las listas -> se llena con ellos
+    if (!catalogo.mapa.size) {
+      const todos = db.listas.flatMap(l => l.productos);
+      if (todos.length) {
+        $("catEstado").textContent = `Llenando el catálogo con tus ${unicos(todos).length} productos...`;
+        if (await catalogar(todos)) { catalogo.cargando = false; return cargarCatalogo(true); }
+      }
+    }
+    catalogo.cargado = true;
+  } catch (e) {
+    $("catEstado").textContent = "No se pudo cargar el catálogo. Revisa tu conexión.";
+  }
+  catalogo.cargando = false;
+  pintarCatalogo();
+}
+
+function contarCopias() {
+  const cuentas = new Map();
+  for (const l of db.listas) for (const p of l.productos) {
+    const k = llaveLocal(p);
+    const c = cuentas.get(k) || { copias: 0, listas: new Set() };
+    c.copias++; c.listas.add(l.id); cuentas.set(k, c);
+  }
+  return cuentas;
+}
+
+function pintarCatalogo() {
+  if (!catalogo.cargado) return;
+  const t = normal($("catBuscar").value);
+  $("catConteo").textContent = `${catalogo.mapa.size} productos`;
+  if (!t) {
+    $("catEstado").textContent = "Escribe un código o un nombre para buscar.";
+    $("catResultados").innerHTML = "";
+    return;
+  }
+  const hallados = [...catalogo.mapa.entries()].filter(([, p]) => coincide(p, t));
+  const mostrados = hallados.slice(0, 100);
+  $("catEstado").textContent = `${hallados.length} coincidencia(s)` + (hallados.length > 100 ? " (se muestran 100; afina la búsqueda)" : "");
+  if (!mostrados.length) { $("catResultados").innerHTML = '<div class="vacio">No hay productos que coincidan.</div>'; return; }
+  const cuentas = contarCopias();
+  const filas = mostrados.map(([k, p]) => {
+    const c = cuentas.get(llaveLocal(p));
+    return `<tr>
+      <td>${esc(p.codigo)}</td><td>${esc(p.nombre)}</td><td>${esc(p.detalle)}</td><td>${esc(p.medida)}</td>
+      <td class="num">${esc(formatoPrecio(p.precio))}</td>
+      <td>${c ? c.listas.size : 0} lista(s)</td>
+      <td style="white-space:nowrap">
+        <input type="text" class="cant" value="1" inputmode="numeric" title="Cantidad de copias" style="width:52px;padding:8px 6px;text-align:center">
+        <button data-cat="agregar" data-k="${esc(k)}">Agregar a esta lista</button>
+        <button class="danger" data-cat="eliminar" data-k="${esc(k)}">Eliminar</button></td>
+    </tr>`;
+  }).join("");
+  $("catResultados").innerHTML = `<table>
+    <tr><th>Código</th><th>Nombre</th><th>Detalle</th><th>Medida</th><th>Precio</th><th>En</th><th></th></tr>${filas}</table>`;
+}
+
+$("btnCatalogo").onclick = () => {
+  cerrarMenu();
+  $("panelCat").hidden = false;
+  $("panelCat").scrollIntoView({behavior: "smooth", block: "start"});
+  cargarCatalogo(false);
+  $("catBuscar").focus();
+};
+$("catCerrar").onclick = () => { $("panelCat").hidden = true; };
+$("catActualizar").onclick = () => cargarCatalogo(true);
+$("catBuscar").oninput = pintarCatalogo;
+
+$("catResultados").onclick = e => {
+  const b = e.target.closest("[data-cat]");
+  if (!b) return;
+  const k = b.dataset.k, p = catalogo.mapa.get(k);
+  if (!p) return;
+  if (b.dataset.cat === "eliminar") { eliminarDelCatalogo(k); return; }
+  const cant = Math.max(1, Math.min(99, parseInt(b.closest("tr").querySelector(".cant").value, 10) || 1));
+  const l = activa();
+  if (l.productos.length + cant > MAX_LISTA) { $("catEstado").textContent = `Una lista admite hasta ${MAX_LISTA} productos.`; return; }
+  for (let i = 0; i < cant; i++) l.productos.push({ ...p });
+  pintar(); guardar(l); pintarCatalogo();
+  $("catEstado").textContent = `Se agregó ${cant === 1 ? "1 copia" : cant + " copias"} de ${p.codigo || p.nombre} a "${titulo(l)}".`;
+};
+
+// Borrar un producto de verdad: del catálogo y de todas las listas. Doble confirmación + contraseña.
+async function eliminarDelCatalogo(k) {
+  const p = catalogo.mapa.get(k);
+  if (!p) return;
+  const llave = llaveLocal(p);
+  const afectadas = db.listas.filter(l => l.productos.some(x => llaveLocal(x) === llave));
+  const copias = afectadas.reduce((n, l) => n + l.productos.filter(x => llaveLocal(x) === llave).length, 0);
+  const si = await confirmar({
+    titulo: "¿Eliminar definitivamente?",
+    texto: `${p.nombre}${p.codigo ? " (" + p.codigo + ")" : ""}\nSe borra del catálogo y de TODAS las listas donde aparece (${copias} copia(s) en ${afectadas.length} lista(s)).\n` +
+           `Esta acción no se puede deshacer.${requiereClave ? "\nSe te pedirá tu contraseña." : ""}`,
+    ok: "Continuar", peligro: true,
+  });
+  if (!si) return;
+  // Llama al servidor; devuelve un texto de error, o null si se borró
+  const borrar = async clave => {
+    try {
+      const r = await fetch("/api/catalogo/eliminar", {method: "POST", headers: JSON_H, body: JSON.stringify({claves: [k], clave})});
+      if (r.status === 401) { location.href = "/login"; return "Tu sesión venció."; }
+      if (r.ok) return null;
+      return (await r.json()).error || "No se pudo eliminar.";
+    } catch (e) { return "Sin conexión. Inténtalo de nuevo."; }
+  };
+  if (requiereClave) {
+    const clave = await pedirClave({ titulo: "Confirma con tu contraseña", texto: "Escribe tu contraseña para eliminar este producto.", ok: "Eliminar", peligro: true, validar: borrar });
+    if (clave === null) return;
+  } else {
+    const error = await borrar("");
+    if (error) { $("catEstado").textContent = error; return; }
+  }
+  catalogo.mapa.delete(k);
+  for (const l of afectadas) l.productos = l.productos.filter(x => llaveLocal(x) !== llave);
+  editIdx = null; limpiarCampos(); pintar(); pintarCatalogo();
+  $("catEstado").textContent = `Eliminado: ${p.nombre}. Se quitó de ${afectadas.length} lista(s) y del catálogo.`;
+  for (const l of afectadas) await guardar(l);
+}
 
 // ---------- PDF ----------
 const PLANTILLA = "etiquetas_plantilla";
@@ -657,6 +941,7 @@ $("archivo").onchange = async e => {
       ids.add(l.id);
       db.listas.push(l);
       await guardar(l);
+      await catalogar(l.productos);
     }
     pintar();
   } catch (err) { alert("El archivo no es un respaldo válido."); }
@@ -800,6 +1085,18 @@ function coincide(p, t) {
   if (!t) return true;
   const texto = normal([p.codigo, p.nombre, p.detalle, p.medida].join(" "));
   return t.split(" ").every(w => texto.includes(w));
+}
+
+// Identifica un producto: su código; si no trae, nombre+detalle+medida (igual criterio que el servidor).
+function llaveLocal(p) {
+  const limpio = s => limpiarTexto(s).toUpperCase();
+  const c = limpio(p.codigo);
+  return c || "N:" + [p.nombre, p.detalle, p.medida].map(limpio).join("|");
+}
+
+// Quita repetidos (mismo producto), conservando el último
+function unicos(productos) {
+  return [...new Map(productos.map(p => [llaveLocal(p), p])).values()];
 }
 
 // Busca en TODAS las listas (la más nueva primero). Devuelve la lista, la posición (i) y el producto.
@@ -946,6 +1243,7 @@ $("importar").onclick = async () => {
     : `Listo: se creó la lista "${titulo(nuevas[0])}" con ${productos.length} productos.`;
   guardarActiva();
   for (const l of nuevas) await guardar(l);
+  await catalogar(productos);   // y quedan también en el catálogo
 };
 
 // ---------- App instalable (PWA) ----------

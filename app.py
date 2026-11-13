@@ -276,6 +276,123 @@ def api_borrar(id_):
     return jsonify(ok=True)
 
 
+# ------------------------------------------------------------ Catálogo ----
+# Todos los productos guardados, aparte de las listas. Quitar un producto de una lista o
+# vaciarla NO lo borra de aquí; borrarlo de verdad pide la contraseña de quien tiene la sesión.
+HASH_CATALOGO = "etiquetas:catalogo"   # hash: campo = clave del producto, valor = JSON compacto
+MAX_LOTE_CATALOGO = 2000               # productos por petición de guardado
+PRESUPUESTO_PAGINA = 900_000           # bytes aprox. por respuesta al leer (muy por debajo de los 4.5 MB de Vercel)
+
+
+def _norm(texto):
+    return " ".join(str(texto or "").split()).upper()
+
+
+def clave_producto(p):
+    """El código normalizado; si el producto no trae código, una huella de nombre+detalle+medida."""
+    codigo = _norm(p.get("codigo"))
+    if codigo:
+        return codigo[:60]
+    huella = hashlib.sha1("|".join(_norm(p.get(k)) for k in ("nombre", "detalle", "medida")).encode()).hexdigest()
+    return "N:" + huella[:12]
+
+
+def limpiar_producto(p):
+    if not isinstance(p, dict):
+        raise ValueError("producto no válido")
+    prod = {k: " ".join(str(p.get(k, "")).split())[:120] for k in CAMPOS}
+    etiquetas.separar_precio(prod["precio"])  # ValueError si el precio no es válido
+    if not prod["nombre"]:
+        raise ValueError("falta el nombre")
+    return prod
+
+
+def verificar_clave_actual(clave):
+    """Confirma la contraseña de quien tiene la sesión abierta. Sin login no hay contraseña que pedir."""
+    if not AUTH:
+        return True
+    if USUARIOS:
+        u = next((x for x in USUARIOS if x["usuario"] == session.get("usuario")), None)
+        return bool(u) and clave_ok(clave, u["clave"])
+    return bool(PASSWORD) and hmac.compare_digest(clave.encode(), PASSWORD.encode())
+
+
+@app.get("/api/catalogo")
+def api_catalogo_leer():
+    """Devuelve el catálogo por páginas (cursor), cada una de ~1 MB como máximo."""
+    cursor = request.args.get("cursor", "0")
+    if not re.fullmatch(r"\d{1,20}", cursor):
+        return jsonify(error="Cursor no válido."), 400
+    filas, usados, total = [], 0, None
+    try:
+        if cursor == "0":
+            total = redis("HLEN", HASH_CATALOGO)
+        for _ in range(12):  # tope de seguridad de llamadas a Redis por respuesta
+            cursor, plano = redis("HSCAN", HASH_CATALOGO, cursor, "COUNT", 3000)
+            for k, v in zip(plano[0::2], plano[1::2]):
+                try:
+                    nombre, detalle, codigo, medida, precio = json.loads(v)
+                except (ValueError, TypeError):
+                    continue
+                filas.append([k, nombre, detalle, codigo, medida, precio])
+                usados += len(k) + len(v)
+            if str(cursor) == "0" or usados >= PRESUPUESTO_PAGINA:
+                break
+    except Exception:
+        return jsonify(error="La nube no está disponible."), 503
+    return jsonify(productos=filas, cursor=str(cursor), total=total)
+
+
+@app.post("/api/catalogo")
+def api_catalogo_guardar():
+    """Agrega o actualiza productos (por su clave) en un solo comando Redis."""
+    datos = request.get_json(silent=True)
+    lote = datos.get("productos") if isinstance(datos, dict) else None
+    if not isinstance(lote, list) or not lote or len(lote) > MAX_LOTE_CATALOGO:
+        return jsonify(error=f"Manda de 1 a {MAX_LOTE_CATALOGO} productos."), 400
+    claves, valores = [], {}
+    try:
+        for p in lote:
+            prod = limpiar_producto(p)
+            k = clave_producto(prod)
+            claves.append(k)
+            valores[k] = json.dumps([prod["nombre"], prod["detalle"], prod["codigo"], prod["medida"], prod["precio"]],
+                                    ensure_ascii=False, separators=(",", ":"))
+    except ValueError:
+        return jsonify(error="Hay un producto no válido (revisa nombre y precio)."), 400
+    comando = ["HSET", HASH_CATALOGO]
+    for k, v in valores.items():
+        comando += [k, v]
+    try:
+        redis(*comando)
+    except Exception:
+        return jsonify(error="No se pudo guardar en el catálogo."), 503
+    return jsonify(claves=claves)
+
+
+@app.post("/api/catalogo/eliminar")
+def api_catalogo_eliminar():
+    """Borra productos del catálogo. Pide la contraseña de quien tiene la sesión abierta."""
+    datos = request.get_json(silent=True)
+    datos = datos if isinstance(datos, dict) else {}
+    claves = datos.get("claves")
+    if not (isinstance(claves, list) and 1 <= len(claves) <= 50
+            and all(isinstance(k, str) and 0 < len(k) <= 80 for k in claves)):
+        return jsonify(error="Claves no válidas."), 400
+    if AUTH:
+        if bloqueado():
+            return jsonify(error="Demasiados intentos. Espera 15 minutos."), 429
+        if not verificar_clave_actual(str(datos.get("clave", ""))):
+            registrar_fallo()
+            return jsonify(error="Contraseña incorrecta."), 403
+        limpiar_fallos()
+    try:
+        eliminados = redis("HDEL", HASH_CATALOGO, *claves)
+    except Exception:
+        return jsonify(error="No se pudo borrar del catálogo."), 503
+    return jsonify(eliminados=eliminados)
+
+
 @app.get("/ping")
 def ping():
     """Lo llama el Cron de Vercel cada día para que Upstash no archive la base."""
@@ -300,11 +417,9 @@ def _icono(tam):
     Si el logo no está, dibuja uno sencillo para que la app se pueda instalar igual."""
     doc = pymupdf.open()
     pg = doc.new_page(width=tam, height=tam)
-    ruta = os.path.join(AQUI, "logo-icono.png")
-    if not os.path.exists(ruta):
-        ruta = os.path.join(AQUI, "logo-etiquetas.png")
+    ruta = os.path.join(AQUI, "logo-etiquetas.png")
     if os.path.exists(ruta):
-        m = tam * 0.04
+        m = tam * 0.05
         pg.insert_image(pymupdf.Rect(m, m, tam - m, tam - m), filename=ruta, keep_proportion=True)
         return pg.get_pixmap(alpha=True).tobytes("png")
     else:
@@ -337,8 +452,8 @@ def manifiesto():
         "background_color": "#191919",
         "theme_color": "#191919",
         "icons": [
-            {"src": "/icono-192.png?v=2", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-            {"src": "/icono-512.png?v=2", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": "/icono-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
         ],
     }
     return Response(json.dumps(datos), mimetype="application/manifest+json")
@@ -400,7 +515,7 @@ def generar():
             etiquetas.separar_precio(prod["precio"])  # valida el precio
             limpios.append(prod)
         plantilla = request.args.get("plantilla")
-        por_hoja = int(plantilla) if plantilla in ("4", "8") else 2
+        por_hoja = int(plantilla) if plantilla in ("4", "6", "8") else 2
         pdf = etiquetas.construir_pdf(limpios, por_hoja)
     except ValueError:
         return jsonify(error="Hay un precio que no es válido."), 400
