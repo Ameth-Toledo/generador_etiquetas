@@ -137,6 +137,7 @@ def llenar_etiqueta(page, pos, p):
 def construir_pdf(productos, por_hoja=2):
     """Devuelve el PDF como bytes (lo usa también la página web).
 
+    por_hoja = 1  -> una etiqueta por hoja carta HORIZONTAL, agrandada a ~121 %
     por_hoja = 2  -> plantilla original (2 etiquetas grandes por hoja carta, vertical)
     por_hoja = 4  -> las mismas etiquetas al ~64 %, 2 columnas x 2 filas en hoja carta HORIZONTAL
     por_hoja = 6  -> las mismas etiquetas al ~49 %, 2 columnas x 3 filas en hoja carta vertical
@@ -158,6 +159,7 @@ def construir_pdf(productos, por_hoja=2):
 
 # etiquetas por hoja -> (columnas, filas, hoja horizontal, aire alrededor de cada etiqueta en puntos)
 DISENOS = {
+    1: (1, 1, True, 24),
     4: (2, 2, True, 8),
     6: (2, 3, False, 4),
     8: (2, 4, False, 6),

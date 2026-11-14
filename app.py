@@ -515,7 +515,7 @@ def generar():
             etiquetas.separar_precio(prod["precio"])  # valida el precio
             limpios.append(prod)
         plantilla = request.args.get("plantilla")
-        por_hoja = int(plantilla) if plantilla in ("4", "6", "8") else 2
+        por_hoja = int(plantilla) if plantilla in ("1", "4", "6", "8") else 2
         pdf = etiquetas.construir_pdf(limpios, por_hoja)
     except ValueError:
         return jsonify(error="Hay un precio que no es válido."), 400
